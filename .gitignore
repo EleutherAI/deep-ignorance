@@ -10,3 +10,10 @@ neox/ssh_keys
 core.*
 *.log
 __pycache__
+
+
+runs/
+*.dir
+*.bat
+*.bak
+*.dat
