@@ -24,11 +24,11 @@ def get_checkpoint_progression() -> List[Dict]:
     """
 
     # Load data
-    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/emergence_results_corrected/progress.json")
+    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/progress.json")
     with open(progress_file, 'r') as f:
         emergence_data = json.load(f)
 
-    checkpoint_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/corrected_checkpoints.json")
+    checkpoint_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/corrected_checkpoints.json")
     with open(checkpoint_file, 'r') as f:
         checkpoints = json.load(f)
 
@@ -134,7 +134,7 @@ def plot_checkpoint_progression(progression: List[Dict], save_pdf: bool = True):
         progression: List of checkpoint data from get_checkpoint_progression()
         save_pdf: Whether to save PDF version (default True)
     """
-    output_dir = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/final_deliverables")
+    output_dir = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/final_deliverables")
 
     # Convert to DataFrame for easier plotting
     df = pd.DataFrame(progression)
@@ -199,6 +199,6 @@ if __name__ == "__main__":
 
     # Also save to CSV for easy access
     df = pd.DataFrame(progression)
-    output_file = "/mnt/ssd-1/lucia/deep-ignorance/analysis/final_deliverables/checkpoint_progression_simple.csv"
+    output_file = "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/final_deliverables/checkpoint_progression_simple.csv"
     df.to_csv(output_file, index=False)
     print(f"\n💾 Data saved to: {output_file}")

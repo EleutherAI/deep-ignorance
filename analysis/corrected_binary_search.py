@@ -13,7 +13,7 @@ from evaluate_single_question import SingleQuestionEvaluator
 class CorrectedCheckpointBinarySearch:
     """Binary search with correct temporal checkpoint ordering."""
 
-    def __init__(self, output_dir: str = "/mnt/ssd-1/lucia/deep-ignorance/analysis/emergence_results_corrected"):
+    def __init__(self, output_dir: str = "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.evaluator = SingleQuestionEvaluator()
@@ -25,7 +25,7 @@ class CorrectedCheckpointBinarySearch:
     def load_data(self):
         """Load checkpoints with CORRECT temporal ordering and questions."""
         # Load corrected checkpoints
-        with open('/mnt/ssd-1/lucia/deep-ignorance/analysis/corrected_checkpoints.json', 'r') as f:
+        with open('/mnt/ssd-1/lucia/deep-ignorance/analysis/results/corrected_checkpoints.json', 'r') as f:
             checkpoint_data = json.load(f)
 
         # Convert to tuple format for binary search
@@ -44,7 +44,7 @@ class CorrectedCheckpointBinarySearch:
         print(f"Last checkpoint: {self.checkpoints[-1][3]} step {self.checkpoints[-1][0]}")
 
         # Load questions
-        with open('/mnt/ssd-1/lucia/deep-ignorance/analysis/questions_for_binary_search.json', 'r') as f:
+        with open('/mnt/ssd-1/lucia/deep-ignorance/analysis/results/questions_for_binary_search.json', 'r') as f:
             self.questions = json.load(f)
 
         print(f"Loaded {len(self.questions)} questions")

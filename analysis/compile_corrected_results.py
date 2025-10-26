@@ -13,14 +13,14 @@ import seaborn as sns
 def load_results() -> Dict:
     """Load the emergence analysis results from corrected analysis."""
     # Check for progress file first (contains partial results)
-    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/emergence_results_corrected/progress.json")
+    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/progress.json")
 
     if progress_file.exists():
         with open(progress_file, 'r') as f:
             return json.load(f)
 
     # Check for detailed results (final complete results)
-    results_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/emergence_results_corrected/detailed_emergence_results.json")
+    results_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/detailed_emergence_results.json")
 
     if results_file.exists():
         with open(results_file, 'r') as f:
@@ -269,7 +269,7 @@ def main():
         print(f"- Mean emergence step: {analysis['emergence_steps']['mean']:.0f}")
 
     # Create output directory
-    output_dir = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/final_deliverables")
+    output_dir = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/final_deliverables")
     output_dir.mkdir(exist_ok=True)
 
     # Create visualizations

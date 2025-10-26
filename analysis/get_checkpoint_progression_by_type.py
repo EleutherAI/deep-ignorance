@@ -26,11 +26,11 @@ def get_checkpoint_progression_by_type() -> Dict[str, List[Dict]]:
     """
 
     # Load data
-    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/emergence_results_corrected/progress.json")
+    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/progress.json")
     with open(progress_file, 'r') as f:
         emergence_data = json.load(f)
 
-    checkpoint_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/corrected_checkpoints.json")
+    checkpoint_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/corrected_checkpoints.json")
     with open(checkpoint_file, 'r') as f:
         checkpoints = json.load(f)
 
@@ -169,7 +169,7 @@ def plot_checkpoint_progression_by_type(progressions: Dict[str, List[Dict]], sav
         progressions: Dictionary with 'cloze' and 'mcqa' progression data
         save_pdf: Whether to save PDF version (default True)
     """
-    output_dir = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/final_deliverables")
+    output_dir = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/final_deliverables")
 
     # Convert to DataFrames for easier plotting
     cloze_df = pd.DataFrame(progressions['cloze'])
@@ -252,8 +252,8 @@ if __name__ == "__main__":
     cloze_df = pd.DataFrame(progressions['cloze'])
     mcqa_df = pd.DataFrame(progressions['mcqa'])
 
-    cloze_output = "/mnt/ssd-1/lucia/deep-ignorance/analysis/final_deliverables/checkpoint_progression_cloze.csv"
-    mcqa_output = "/mnt/ssd-1/lucia/deep-ignorance/analysis/final_deliverables/checkpoint_progression_mcqa.csv"
+    cloze_output = "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/final_deliverables/checkpoint_progression_cloze.csv"
+    mcqa_output = "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/final_deliverables/checkpoint_progression_mcqa.csv"
 
     cloze_df.to_csv(cloze_output, index=False)
     mcqa_df.to_csv(mcqa_output, index=False)
