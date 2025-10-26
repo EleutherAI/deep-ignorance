@@ -184,7 +184,7 @@ def get_weight_statistics(models, tokenizer, plot=False):
 
     results = []
 
-    with shelve.open("cache") as cache:
+    with shelve.open("cache/cache") as cache:
         # SVCCA metrics
         if "svcca_E" not in cache:
             cache["svcca_E"] = (
@@ -551,7 +551,7 @@ def main(args):
 
     dataset = load_and_tokenize(args.dataset_name, tokenizer=tokenizer, N=args.N)
 
-    with shelve.open(args.cache_name) as cache:
+    with shelve.open(f"cache/{args.cache_name}") as cache:
         if "sims" not in cache:
             cache["sims"] = compute_sims_2(args.models, dataset, models[0], args.device)
 
