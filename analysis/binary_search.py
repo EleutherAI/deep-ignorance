@@ -3,29 +3,36 @@
 Corrected binary search using proper temporal checkpoint ordering.
 """
 
+import hashlib
+import os
+from datetime import datetime
 import json
 import time
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Optional
 from pathlib import Path
 import argparse
-from evaluate_single_question import SingleQuestionEvaluator
+from analysis.evaluate_single_question import SingleQuestionEvaluator
 
 class CorrectedCheckpointBinarySearch:
     """Binary search with correct temporal checkpoint ordering."""
 
-    def __init__(self, output_dir: str = "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected"):
-        self.output_dir = Path(output_dir)
+    def __init__(self, output_path: Path, correct_checkpoints_path: Path, questions_for_binary_search_path: Path):
+        self.output_dir = output_path
         self.output_dir.mkdir(exist_ok=True)
         self.evaluator = SingleQuestionEvaluator()
         self.checkpoints = []  # Will be loaded with correct ordering
         self.questions = []
         self.results = {}
-        self.progress_file = self.output_dir / "progress.json"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.progress_file = self.output_dir / f"progress_{timestamp}.json"
+
+        self.correct_checkpoints_path = correct_checkpoints_path
+        self.questions_for_binary_search_path = questions_for_binary_search_path
 
     def load_data(self):
         """Load checkpoints with CORRECT temporal ordering and questions."""
         # Load corrected checkpoints
-        with open('/mnt/ssd-1/lucia/deep-ignorance/analysis/results/corrected_checkpoints.json', 'r') as f:
+        with open(self.correct_checkpoints_path, 'r') as f:
             checkpoint_data = json.load(f)
 
         # Convert to tuple format for binary search
@@ -44,24 +51,44 @@ class CorrectedCheckpointBinarySearch:
         print(f"Last checkpoint: {self.checkpoints[-1][3]} step {self.checkpoints[-1][0]}")
 
         # Load questions
-        with open('/mnt/ssd-1/lucia/deep-ignorance/analysis/results/questions_for_binary_search.json', 'r') as f:
+        with open(self.questions_for_binary_search_path, 'r') as f:
             self.questions = json.load(f)
 
         print(f"Loaded {len(self.questions)} questions")
 
     def load_progress(self):
         """Load existing progress if available."""
-        if self.progress_file.exists():
-            with open(self.progress_file, 'r') as f:
-                self.results = json.load(f)
-            print(f"Loaded progress: {len(self.results)} questions already processed")
-        else:
-            self.results = {}
+        # Find all progress files in the output directory
+        progress_files = list(self.output_dir.glob("progress*.json"))
+        if len(progress_files) == 0:
+            return
+
+        print(f"Loading {len(progress_files)} progress files")
+
+        for progress_file in progress_files:
+            # merge each file into results
+            with open(progress_file, 'r') as f:
+                self.results = {**self.results, **json.load(f)}
 
     def save_progress(self):
         """Save current progress."""
+        if self.progress_file.exists():
+            with open(self.progress_file, 'r') as f:
+                try:
+                    disk_data = json.load(f)
+                except json.JSONDecodeError:
+                    disk_data = {}
+        else:
+            disk_data = {}
+
+        merged = {**disk_data, **self.results}
+        
         with open(self.progress_file, 'w') as f:
-            json.dump(self.results, f, indent=2)
+            json.dump(merged, f, indent=2)
+        
+        self.results = merged
+
+        self.load_progress()
 
     def get_question_key(self, question: Dict) -> str:
         """Generate unique key for a question."""
@@ -82,7 +109,6 @@ class CorrectedCheckpointBinarySearch:
     def binary_search_emergence(self, question: Dict) -> Dict:
         """
         Binary search to find first checkpoint where question becomes correct.
-        Uses CORRECT temporal ordering.
         """
         question_key = self.get_question_key(question)
         print(f"\n🔍 Searching for emergence of: {question_key}")
@@ -178,6 +204,8 @@ class CorrectedCheckpointBinarySearch:
             if question_key in self.results:
                 print(f"⏭️  Skipping {question_key} (already processed)")
                 continue
+            else:
+                print(f"🔍 Processing {question_key} at index {i} of {len(self.questions)}")
 
             # Process question
             result = self.binary_search_emergence(question)
@@ -185,16 +213,16 @@ class CorrectedCheckpointBinarySearch:
             processed_count += 1
 
             # Save progress every 5 questions
-            if processed_count % 5 == 0:
-                self.save_progress()
-                elapsed = time.time() - start_time
-                avg_time = elapsed / processed_count
-                remaining = len(self.questions) - len(self.results)
-                eta = avg_time * remaining / 3600  # Hours
+            # if processed_count % 5 == 0:
+            self.save_progress()
+            elapsed = time.time() - start_time
+            avg_time = elapsed / processed_count
+            remaining = len(self.questions) - len(self.results)
+            eta = avg_time * remaining / 3600  # Hours
 
-                print(f"\n📈 Progress: {len(self.results)}/{len(self.questions)} questions")
-                print(f"⏱️  Average time per question: {avg_time:.1f}s")
-                print(f"🕐 ETA: {eta:.1f} hours")
+            print(f"\n📈 Progress: {len(self.results)}/{len(self.questions)} questions")
+            print(f"⏱️  Average time per question: {avg_time:.1f}s")
+            print(f"🕐 ETA: {eta:.1f} hours")
 
             # Stop if max reached
             if max_questions and processed_count >= max_questions:
@@ -205,6 +233,11 @@ class CorrectedCheckpointBinarySearch:
 
         elapsed = time.time() - start_time
         print(f"\n✅ Completed {processed_count} questions in {elapsed/3600:.2f} hours")
+
+    def save_final_results(self):
+        """Save final results."""
+        with open(self.output_dir / "final_results.json", "w") as f:
+            json.dump(self.results, f, indent=2)
 
 def main():
     parser = argparse.ArgumentParser(description='Corrected binary search for answer emergence')
@@ -218,9 +251,19 @@ def main():
     args = parser.parse_args()
 
     # Initialize search with corrected ordering
-    searcher = CorrectedCheckpointBinarySearch()
+    output_path = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected")
+    correct_checkpoints_path = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/corrected_checkpoints.json")
+    questions_for_binary_search_path = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/questions_for_binary_search.json")
+
+    searcher = CorrectedCheckpointBinarySearch(
+        output_path=output_path,
+        correct_checkpoints_path=correct_checkpoints_path,
+        questions_for_binary_search_path=questions_for_binary_search_path
+    )
     searcher.load_data()
     searcher.load_progress()
+
+    
 
     if args.test_mode:
         print("🧪 Running in test mode...")
@@ -228,6 +271,8 @@ def main():
 
     # Run search
     searcher.run_search(args.start_idx, args.max_questions)
+
+    searcher.save_final_results()
 
 if __name__ == "__main__":
     main()

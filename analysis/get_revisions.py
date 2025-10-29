@@ -57,6 +57,8 @@ def get_checkpoint_revisions(model_name: str) -> List[Tuple[int, str]]:
     return checkpoints
 
 def main():
+    output_file = "/mnt/ssd-1/lucia/deep-ignorance/analysis/available_checkpoints.json"
+
     # Models to analyze
     models = {
         "pretraining": "EleutherAI/deep-ignorance-pretraining-stage-unfiltered",
@@ -79,7 +81,6 @@ def main():
         all_checkpoints[stage] = checkpoints
 
     # Save results
-    output_file = "/mnt/ssd-1/lucia/deep-ignorance/analysis/available_checkpoints.json"
     with open(output_file, 'w') as f:
         # Convert to serializable format
         serializable = {}

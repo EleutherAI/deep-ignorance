@@ -10,10 +10,8 @@ from typing import Dict, List
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-def load_results() -> Dict:
+def load_results(results_file) -> Dict:
     """Load the emergence analysis results."""
-    results_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/emergence_results/detailed_emergence_results.json")
-
     if not results_file.exists():
         print(f"Results file not found: {results_file}")
         return {}
@@ -34,7 +32,7 @@ def create_emergence_dataset(results: Dict) -> pd.DataFrame:
                 'question': result['question'][:100] + "..." if len(result['question']) > 100 else result['question'],
                 'correct_answer': result['correct_answer'],
                 'emergence_step': result['emergence_step'],
-                'emergence_model': 'pretraining' if 'pretraining-stage' in result.get('emergence_model', '') else 'annealing',
+                'emergence_model': 'pretraining' if result.get('emergence_stage', '') == 'pretraining' else 'annealing',
                 'total_evaluations': result['total_evaluations'],
                 'always_correct': result['always_correct'],
                 'never_correct': result['never_correct'],
@@ -204,10 +202,16 @@ Generated on: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def main():
     """Main function to compile all results."""
+    results_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/final_results.json")
+
+    # Create output directory
+    output_dir = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/final_deliverables")
+    output_dir.mkdir(exist_ok=True)
+
     print("Compiling emergence analysis results...")
 
     # Load results
-    results = load_results()
+    results = load_results(results_file)
     if not results:
         print("No results found. Make sure the analysis has completed.")
         return
@@ -225,10 +229,6 @@ def main():
     print(f"- Always correct: {analysis['always_correct']}")
     print(f"- Never correct: {analysis['never_correct']}")
     print(f"- Emerged during training: {analysis['emerged_during_training']}")
-
-    # Create output directory
-    output_dir = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/final_deliverables")
-    output_dir.mkdir(exist_ok=True)
 
     # Create visualizations
     create_visualizations(df, output_dir)

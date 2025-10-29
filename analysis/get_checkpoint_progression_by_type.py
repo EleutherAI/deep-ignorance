@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import List, Dict
 
-def get_checkpoint_progression_by_type() -> Dict[str, List[Dict]]:
+def get_checkpoint_progression_by_type(tokens_per_step: int) -> Dict[str, List[Dict]]:
     """
     Returns the number of questions the model gets right at each checkpoint,
     split by question type (cloze vs MCQA).
@@ -19,6 +19,7 @@ def get_checkpoint_progression_by_type() -> Dict[str, List[Dict]]:
         Dictionary with keys 'cloze' and 'mcqa', each containing a list of:
         - checkpoint: checkpoint index (0-111)
         - step: training step number
+        - all_stages_step: training step number accumulated over all stages
         - stage: 'pretraining' or 'annealing'
         - temporal_order: true chronological order
         - correct_count: cumulative number of questions correct at this checkpoint
@@ -26,7 +27,7 @@ def get_checkpoint_progression_by_type() -> Dict[str, List[Dict]]:
     """
 
     # Load data
-    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/progress.json")
+    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/final_results.json")
     with open(progress_file, 'r') as f:
         emergence_data = json.load(f)
 
@@ -77,13 +78,25 @@ def get_checkpoint_progression_by_type() -> Dict[str, List[Dict]]:
                     mcqa_questions['emerged'].append(question_info)
 
     # Calculate progression for each type
-    def calculate_progression(question_data):
+    def calculate_progression(question_data, tokens_per_step):
         progression = []
         always_correct = question_data['always_correct']
         emerged_questions = question_data['emerged']
+        
+        pretraining_final_step = max(
+            ckpt['step'] 
+            for ckpt in checkpoints 
+            if ckpt['stage'] == 'pretraining'
+        )
 
         for i, ckpt in enumerate(checkpoints):
             current_temporal = ckpt['temporal_order']
+            
+            all_stages_step = (
+                ckpt['step'] 
+                if ckpt['stage'] == 'pretraining' 
+                else ckpt['step'] + pretraining_final_step
+            )
 
             # Count questions correct at this checkpoint
             correct_count = always_correct
@@ -98,6 +111,8 @@ def get_checkpoint_progression_by_type() -> Dict[str, List[Dict]]:
             progression.append({
                 'checkpoint': i,
                 'step': ckpt['step'],
+                'all_stages_step': all_stages_step,
+                'all_stages_tokens': all_stages_step * tokens_per_step,
                 'stage': ckpt['stage'],
                 'temporal_order': current_temporal,
                 'correct_count': correct_count,
@@ -106,18 +121,18 @@ def get_checkpoint_progression_by_type() -> Dict[str, List[Dict]]:
 
         return progression
 
-    cloze_progression = calculate_progression(cloze_questions)
-    mcqa_progression = calculate_progression(mcqa_questions)
+    cloze_progression = calculate_progression(cloze_questions, tokens_per_step)
+    mcqa_progression = calculate_progression(mcqa_questions, tokens_per_step)
 
     return {
         'cloze': cloze_progression,
         'mcqa': mcqa_progression
     }
 
-def print_progression_summary_by_type():
+def print_progression_summary_by_type(tokens_per_step):
     """Print a nice summary of the progression by question type."""
 
-    progressions = get_checkpoint_progression_by_type()
+    progressions = get_checkpoint_progression_by_type(tokens_per_step)
     cloze_prog = progressions['cloze']
     mcqa_prog = progressions['mcqa']
 
@@ -217,6 +232,7 @@ def plot_checkpoint_progression_by_type(progressions: Dict[str, List[Dict]], sav
     cloze_final = progressions['cloze'][-1]['correct_count']
     mcqa_final = progressions['mcqa'][-1]['correct_count']
     total_final = cloze_final + mcqa_final
+    breakpoint()
 
     plt.annotate(f'Final Cloze: {cloze_final}',
                 xy=(len(progressions['cloze'])-1, cloze_final),
@@ -243,7 +259,9 @@ def plot_checkpoint_progression_by_type(progressions: Dict[str, List[Dict]], sav
     plt.close()
 
 if __name__ == "__main__":
-    progressions = print_progression_summary_by_type()
+    tokens_per_step = 4194304
+
+    progressions = print_progression_summary_by_type(tokens_per_step)
 
     # Create and save plot
     plot_checkpoint_progression_by_type(progressions, save_pdf=True)

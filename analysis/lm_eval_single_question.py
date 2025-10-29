@@ -1,30 +1,25 @@
 #!/usr/bin/env python3
 """
-Evaluation infrastructure for testing individual questions at specific checkpoints.
-Uses the official lm_eval harness to ensure consistency with original "correct answers" evaluation.
+Single question evaluator using the official lm_eval harness.
+This ensures consistency with the original "correct answers" evaluation.
 """
 
 import json
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 # Import lm_eval modules for direct usage
 from lm_eval import simple_evaluate
 from lm_eval.tasks import TaskManager
 
-class SingleQuestionEvaluator:
-    """Evaluates individual questions at specific model checkpoints using lm_eval harness."""
+class LMEvalSingleQuestionEvaluator:
+    """Evaluates individual questions using the official lm_eval harness."""
 
     def __init__(self, lm_eval_tasks_path: str = "/mnt/ssd-1/lucia/deep-ignorance/lm_eval_tasks"):
         self.lm_eval_tasks_path = lm_eval_tasks_path
         self.current_model_name = None
         self.current_revision = None
 
-    def load_model(self, model_name: str, revision: Optional[str]):
-        """Configure the model for evaluation."""
-        self.current_model_name = model_name
-        self.current_revision = revision
-        print(f"Configured model: {model_name} at revision {revision}")
 
     def evaluate_question(self, question_data: Dict) -> bool:
         """
@@ -81,11 +76,20 @@ class SingleQuestionEvaluator:
             print(f"Evaluation failed: {e}")
             return False
 
+    def load_model(self, model_name: str, revision: Optional[str]):
+        """Configure the model for evaluation."""
+        self.current_model_name = model_name
+        self.current_revision = revision
+        print(f"Configured model: {model_name} at revision {revision}")
 
-def test_evaluator():
-    """Test the evaluator with a known question."""
-    # Load a test question
-    questions_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/questions_for_binary_search.json")
+def test_lm_eval_evaluator():
+    """Test the LM eval evaluator with a known question."""
+    questions_file = "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/questions_for_binary_search.json"
+
+    evaluator = LMEvalSingleQuestionEvaluator()
+    evaluator.load_model("EleutherAI/deep-ignorance-unfiltered", None)
+
+    # Load the test questions
     with open(questions_file, 'r') as f:
         questions = json.load(f)
 
@@ -97,15 +101,11 @@ def test_evaluator():
             break
 
     if test_question:
-        evaluator = SingleQuestionEvaluator()
-        evaluator.load_model("EleutherAI/deep-ignorance-unfiltered", None)
-
         print(f"Testing question: {test_question['question'][:100]}...")
         result = evaluator.evaluate_question(test_question)
         print(f"Result: {result}")
     else:
         print("No test question found")
 
-
 if __name__ == "__main__":
-    test_evaluator()
+    test_lm_eval_evaluator()

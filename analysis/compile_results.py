@@ -10,17 +10,11 @@ from typing import Dict, List
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-def load_results() -> Dict:
+def load_results(progress_file: Path, results_file: Path) -> Dict:
     """Load the emergence analysis results from corrected analysis."""
-    # Check for progress file first (contains partial results)
-    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/progress.json")
-
     if progress_file.exists():
         with open(progress_file, 'r') as f:
             return json.load(f)
-
-    # Check for detailed results (final complete results)
-    results_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/detailed_emergence_results.json")
 
     if results_file.exists():
         with open(results_file, 'r') as f:
@@ -238,10 +232,16 @@ Generated on: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def main():
     """Main function to compile all results."""
+    # Check for progress file first (contains partial results)
+    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/progress.json")
+
+    # Check for detailed results (final complete results)
+    results_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/detailed_emergence_results.json")
+
     print("Compiling corrected emergence analysis results...")
 
     # Load results
-    results = load_results()
+    results = load_results(progress_file, results_file)
     if not results:
         print("No results found. Make sure the analysis has completed.")
         return

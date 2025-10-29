@@ -67,7 +67,7 @@ def analyze_checkpoint_progression(checkpoints: List[Tuple[int, str, str]]):
         model_short = "pretraining" if "pretraining-stage" in model else "annealing"
         print(f"  {i:2d}. Step {step:6d} ({model_short}): {revision}")
 
-def save_processed_checkpoints(checkpoints: List[Tuple[int, str, str]]):
+def save_processed_checkpoints(checkpoints: List[Tuple[int, str, str]], output_file: str):
     """Save the processed checkpoint list."""
     # Convert to serializable format
     checkpoint_list = []
@@ -79,7 +79,6 @@ def save_processed_checkpoints(checkpoints: List[Tuple[int, str, str]]):
             "stage": "pretraining" if "pretraining-stage" in model_name else "annealing"
         })
 
-    output_file = '/mnt/ssd-1/lucia/deep-ignorance/analysis/sorted_checkpoints.json'
     with open(output_file, 'w') as f:
         json.dump(checkpoint_list, f, indent=2)
 
@@ -87,6 +86,8 @@ def save_processed_checkpoints(checkpoints: List[Tuple[int, str, str]]):
     return output_file
 
 def main():
+    output_file = '/mnt/ssd-1/lucia/deep-ignorance/analysis/sorted_checkpoints.json'
+
     # Load checkpoint data
     checkpoints_data = load_checkpoints()
 
@@ -97,7 +98,7 @@ def main():
     analyze_checkpoint_progression(sorted_checkpoints)
 
     # Save processed data
-    save_processed_checkpoints(sorted_checkpoints)
+    save_processed_checkpoints(sorted_checkpoints, output_file)
 
 if __name__ == "__main__":
     main()
