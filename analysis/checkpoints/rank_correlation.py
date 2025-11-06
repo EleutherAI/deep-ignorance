@@ -5,9 +5,11 @@ import matplotlib.pyplot as plt
 from analysis.utils import assert_type
 
 
-def filter_unstably_learned_questions(pretrain: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
+def filter_unstably_learned_questions(
+    pretrain: pd.DataFrame, verbose: bool = True
+) -> pd.DataFrame:
     """Remove items that are not correct at the final pretraining step."""
-    pretrain = pretrain.sort_values('all_stages_step')
+    pretrain = pretrain.sort_values("all_stages_step")
 
     # Identify final-step correctness per (task, doc_id) pair
     final_pretrain_correct = pretrain.groupby(["task", "doc_id"])["correct"].last()
@@ -15,24 +17,30 @@ def filter_unstably_learned_questions(pretrain: pd.DataFrame, verbose: bool = Tr
 
     # Build stable-only dataframe
     stable_pretrain = (
-        pretrain.set_index(["task", "doc_id"])
-               .loc[stable_pretrain_ids]
-               .reset_index()
+        pretrain.set_index(["task", "doc_id"]).loc[stable_pretrain_ids].reset_index()
     )
     stable_pretrain = assert_type(pd.DataFrame, stable_pretrain)
 
     if verbose:
-        final_step = pretrain['all_stages_step'].max()
-        final_step_data = pretrain[pretrain['all_stages_step'] == final_step]
+        final_step = pretrain["all_stages_step"].max()
+        final_step_data = pretrain[pretrain["all_stages_step"] == final_step]
         print(f"Final pretraining step: {final_step}")
-        print(f"Correct at final pretraining step: {final_step_data['correct'].sum()} / {len(final_step_data)}")
+        print(
+            f"Correct at final pretraining step: {final_step_data['correct'].sum()} / {len(final_step_data)}"
+        )
 
         # Use the same unit for counts: unique (task, doc_id) pairs
-        total_pairs = len(final_pretrain_correct)  # same as pretrain.groupby(["task","doc_id"]).ngroups
-        unstable_pretrain_ids = set(final_pretrain_correct.index) - set(stable_pretrain_ids)
+        total_pairs = len(
+            final_pretrain_correct
+        )  # same as pretrain.groupby(["task","doc_id"]).ngroups
+        unstable_pretrain_ids = set(final_pretrain_correct.index) - set(
+            stable_pretrain_ids
+        )
 
         ever_correct = pretrain.groupby(["task", "doc_id"])["correct"].any()
-        transient_learners = ever_correct[ever_correct].index.difference(stable_pretrain_ids)
+        transient_learners = ever_correct[ever_correct].index.difference(
+            stable_pretrain_ids
+        )
 
         print(
             f"Excluded {len(unstable_pretrain_ids)} unstably learned pretraining questions "
@@ -43,26 +51,28 @@ def filter_unstably_learned_questions(pretrain: pd.DataFrame, verbose: bool = Tr
     return stable_pretrain
 
 
-def filter_unstably_unlearned_questions(unlearn: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
+def filter_unstably_unlearned_questions(
+    unlearn: pd.DataFrame, verbose: bool = True
+) -> pd.DataFrame:
     """Remove items that are not incorrect at the final unlearning step."""
-    unlearn = unlearn.sort_values('all_stages_step')
+    unlearn = unlearn.sort_values("all_stages_step")
 
-    final_unlearn_incorrect = (
-        ~unlearn.groupby(["task", "doc_id"])["correct"].last()
-    )
+    final_unlearn_incorrect = ~unlearn.groupby(["task", "doc_id"])["correct"].last()
     stable_unlearn_ids = final_unlearn_incorrect[final_unlearn_incorrect].index
 
     stable_unlearn = (
-        unlearn.set_index(["task", "doc_id"])
-               .loc[stable_unlearn_ids]
-               .reset_index()
+        unlearn.set_index(["task", "doc_id"]).loc[stable_unlearn_ids].reset_index()
     )
     stable_unlearn = assert_type(pd.DataFrame, stable_unlearn)
 
     if verbose:
-        unstable_unlearn_ids = set(final_unlearn_incorrect.index) - set(stable_unlearn_ids)
-        print(f"Excluded {len(unstable_unlearn_ids)} unstably unlearned questions "
-        f"(out of {len(final_unlearn_incorrect)}).")
+        unstable_unlearn_ids = set(final_unlearn_incorrect.index) - set(
+            stable_unlearn_ids
+        )
+        print(
+            f"Excluded {len(unstable_unlearn_ids)} unstably unlearned questions "
+            f"(out of {len(final_unlearn_incorrect)})."
+        )
 
     return stable_unlearn
 
@@ -74,7 +84,10 @@ def plot_correct_over_time(df: pd.DataFrame):
     # Ensure consistent ordering of phases
     phase_order = ["pretraining", "annealing", "unlearning_annealing"]
 
-    for name in sorted(df["nickname"].unique(), key=lambda x: phase_order.index(x) if x in phase_order else 999):
+    for name in sorted(
+        df["nickname"].unique(),
+        key=lambda x: phase_order.index(x) if x in phase_order else 999,
+    ):
         group = df[df["nickname"] == name]
         counts = (
             group.groupby("all_stages_step")["correct"]
@@ -116,40 +129,69 @@ def main():
     test = True
 
     if test:
-        # For pretraining: find questions that transition from incorrect to correct
-        pretrain = df[df['stage'] == 'pretraining'].sort_values('all_stages_step')
+        # Pretraining questions
+        pretrain = df[df["stage"] == "pretraining"].sort_values("all_stages_step")
         pretrain = filter_unstably_learned_questions(pretrain)
-        learning = pretrain.groupby('doc_id', group_keys=False).apply(
-            lambda x: x[x['correct']]['all_stages_step'].min() if (~x['correct']).any() and x['correct'].any() else None, 
-            include_groups=False
-        ).dropna()
+        learning = pretrain.groupby(["task", "doc_id"], group_keys=False).apply(
+            lambda x: x[x["correct"]]["all_stages_step"].min(), include_groups=False
+        )
 
-        # For unlearning: find questions that transition from correct to incorrect
-        unlearn = df[df['nickname'] == 'unlearning_annealing'].sort_values('all_stages_step')
+        # Unlearning questions
+        unlearn = df[df["nickname"] == "unlearning_annealing"].sort_values(
+            "all_stages_step"
+        )
         unlearn = filter_unstably_unlearned_questions(unlearn)
-        unlearning = unlearn.groupby('doc_id', group_keys=False).apply(
-            lambda x: x[~x['correct']]['all_stages_step'].min() if x['correct'].any() and (~x['correct']).any() else None,
-            include_groups=False
-        ).dropna()
+        unlearning = unlearn.groupby(["task", "doc_id"], group_keys=False).apply(
+            lambda x: x[~x["correct"]]["all_stages_step"].min(), include_groups=False
+        )
 
-        # Find common questions that both learned and unlearned
+        # Intersection of learned and unlearned questions
         common_docs = learning.index.intersection(unlearning.index)
         learning_steps = learning[common_docs].sort_index()
         unlearning_steps = unlearning[common_docs].sort_index()
 
-        learning_order = learning_steps.rank()
-        unlearning_order = unlearning_steps.rank()
+        def correlation_report(subset_label, subset_docs):
+            learning_sub = learning_steps.loc[subset_docs]
+            unlearning_sub = unlearning_steps.loc[subset_docs]
 
-        # Calculate correlations
-        spearman_corr, spearman_p = spearmanr(learning_order, unlearning_order)
-        pearson_corr, pearson_p = pearsonr(learning_order, unlearning_order)
+            assert not learning_sub.index.duplicated().any()
+            assert not unlearning_sub.index.duplicated().any()
+            assert len(learning_sub) == len(unlearning_sub)
 
-        print(f"Number of questions analyzed: {len(common_docs)}")
-        print(f"\nSpearman correlation: {spearman_corr:.4f} (p={spearman_p:.4e})")
-        print(f"Pearson correlation: {pearson_corr:.4f} (p={pearson_p:.4e})")
-        print(f"\nInterpretation: {'Significant' if spearman_p < 0.05 else 'Not significant'} relationship between learning and unlearning order")
+            if len(subset_docs) < 3:
+                print(
+                    f"\n[{subset_label}] Too few items ({len(subset_docs)}) for reliable correlation."
+                )
+                return
 
-    
+            learning_order = learning_sub.rank()
+            unlearning_order = unlearning_sub.rank()
+            spearman_corr, spearman_p = spearmanr(learning_order, unlearning_order)
+            pearson_corr, pearson_p = pearsonr(learning_order, unlearning_order)
+            print(f"\n[{subset_label}]")
+            print(f"  Number of questions: {len(subset_docs)}")
+            print(f"  Spearman ρ = {spearman_corr:.4f} (p={spearman_p:.4e})")
+            # print(f"  Pearson  r = {pearson_corr:.4f} (p={pearson_p:.4e})")
+            if spearman_p < 0.05:
+                print(
+                    "  → Significant relationship between learning and unlearning order"
+                )
+            else:
+                print("  → Not significant")
+
+        # Split by task type
+        cloze_docs = common_docs[
+            common_docs.get_level_values("task") == "wmdp_bio_cloze_verified"
+        ]
+        other_docs = common_docs[
+            common_docs.get_level_values("task") != "wmdp_bio_cloze_verified"
+        ]
+
+        # Global and split analyses
+        print(f"Overall: {len(common_docs)} common questions total")
+        correlation_report("All tasks (combined)", common_docs)
+        correlation_report("wmdp_bio_cloze_verified only", cloze_docs)
+        correlation_report("All other tasks", other_docs)
 
 
 if __name__ == "__main__":
