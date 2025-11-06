@@ -3,14 +3,15 @@
 Function to show the number of questions the model gets right at each checkpoint,
 split by question type (cloze vs MCQA).
 """
-
 import json
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 from pathlib import Path
 from typing import List, Dict
 
-def get_checkpoint_progression_by_type(tokens_per_step: int) -> Dict[str, List[Dict]]:
+
+def get_checkpoint_progression_by_type(tokens_per_step: int, progress_file: Path, checkpoint_file: Path) -> Dict[str, List[Dict]]:
     """
     Returns the number of questions the model gets right at each checkpoint,
     split by question type (cloze vs MCQA).
@@ -27,11 +28,9 @@ def get_checkpoint_progression_by_type(tokens_per_step: int) -> Dict[str, List[D
     """
 
     # Load data
-    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/final_results.json")
     with open(progress_file, 'r') as f:
         emergence_data = json.load(f)
 
-    checkpoint_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/corrected_checkpoints.json")
     with open(checkpoint_file, 'r') as f:
         checkpoints = json.load(f)
 
@@ -82,6 +81,8 @@ def get_checkpoint_progression_by_type(tokens_per_step: int) -> Dict[str, List[D
         progression = []
         always_correct = question_data['always_correct']
         emerged_questions = question_data['emerged']
+
+        total_correct = always_correct + len(emerged_questions)
         
         pretraining_final_step = max(
             ckpt['step'] 
@@ -116,7 +117,8 @@ def get_checkpoint_progression_by_type(tokens_per_step: int) -> Dict[str, List[D
                 'stage': ckpt['stage'],
                 'temporal_order': current_temporal,
                 'correct_count': correct_count,
-                'newly_correct': newly_correct
+                'newly_correct': newly_correct,
+                'fraction_correct': correct_count / total_correct
             })
 
         return progression
@@ -129,10 +131,10 @@ def get_checkpoint_progression_by_type(tokens_per_step: int) -> Dict[str, List[D
         'mcqa': mcqa_progression
     }
 
-def print_progression_summary_by_type(tokens_per_step):
+def print_progression_summary_by_type(tokens_per_step, progress_file: Path, checkpoint_file: Path):
     """Print a nice summary of the progression by question type."""
 
-    progressions = get_checkpoint_progression_by_type(tokens_per_step)
+    progressions = get_checkpoint_progression_by_type(tokens_per_step, progress_file, checkpoint_file)
     cloze_prog = progressions['cloze']
     mcqa_prog = progressions['mcqa']
 
@@ -176,7 +178,7 @@ def print_progression_summary_by_type(tokens_per_step):
 
     return progressions
 
-def plot_checkpoint_progression_by_type(progressions: Dict[str, List[Dict]], save_pdf: bool = True):
+def plot_checkpoint_progression_by_type(progressions: Dict[str, List[Dict]], output_path: Path, plot_fraction: bool = False):
     """
     Create a plot of the checkpoint progression split by question type and save to PDF and PNG.
 
@@ -184,7 +186,7 @@ def plot_checkpoint_progression_by_type(progressions: Dict[str, List[Dict]], sav
         progressions: Dictionary with 'cloze' and 'mcqa' progression data
         save_pdf: Whether to save PDF version (default True)
     """
-    output_dir = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/final_deliverables")
+    pdf_path = output_dir / f'checkpoint_progression_by_type_{"fraction" if plot_fraction else "count"}.pdf'
 
     # Convert to DataFrames for easier plotting
     cloze_df = pd.DataFrame(progressions['cloze'])
@@ -198,83 +200,104 @@ def plot_checkpoint_progression_by_type(progressions: Dict[str, List[Dict]], sav
     mcqa_pretraining = mcqa_df[mcqa_df['stage'] == 'pretraining']
     mcqa_annealing = mcqa_df[mcqa_df['stage'] == 'annealing']
 
-    # Plot cloze questions
-    plt.plot(cloze_pretraining['temporal_order'], cloze_pretraining['correct_count'],
-             'b-', linewidth=3, label='Cloze (Pretraining)', marker='o', markersize=3, alpha=0.8)
+    y_column = 'correct_count' if not plot_fraction else 'fraction_correct'
+    if plot_fraction:
+        if plot_fraction:
+            plt.plot(cloze_pretraining['all_stages_tokens'], cloze_pretraining[y_column] * 100,
+                    'b-', linewidth=3, label='Cloze (Pretraining)', marker='o', markersize=3, alpha=0.8)
+            
+            if len(cloze_annealing) > 0:
+                plt.plot(cloze_annealing['all_stages_tokens'], cloze_annealing[y_column] * 100,
+                        'b--', linewidth=3, label='Cloze (Annealing)', marker='o', markersize=3, alpha=0.8)
+            
+            plt.plot(mcqa_pretraining['all_stages_tokens'], mcqa_pretraining[y_column] * 100,
+                    'r-', linewidth=3, label='MCQA (Pretraining)', marker='s', markersize=3, alpha=0.8)
+            
+            if len(mcqa_annealing) > 0:
+                plt.plot(mcqa_annealing['all_stages_tokens'], mcqa_annealing[y_column] * 100,
+                        'r--', linewidth=3, label='MCQA (Annealing)', marker='s', markersize=3, alpha=0.8)
+            
+            plt.ylabel('Percent Correct (%)', fontsize=12)
+    else:
+        # Keep your existing plotting code for count
+        plt.plot(cloze_pretraining['all_stages_tokens'], cloze_pretraining[y_column],
+                'b-', linewidth=3, label='Cloze (Pretraining)', marker='o', markersize=3, alpha=0.8)
+       
 
-    if len(cloze_annealing) > 0:
-        plt.plot(cloze_annealing['temporal_order'], cloze_annealing['correct_count'],
-                 'b--', linewidth=3, label='Cloze (Annealing)', marker='o', markersize=3, alpha=0.8)
+        if len(cloze_annealing) > 0:
+            plt.plot(cloze_annealing['all_stages_tokens'], cloze_annealing[y_column],
+                    'b--', linewidth=3, label='Cloze (Annealing)', marker='o', markersize=3, alpha=0.8)
 
-    # Plot MCQA questions
-    plt.plot(mcqa_pretraining['temporal_order'], mcqa_pretraining['correct_count'],
-             'r-', linewidth=3, label='MCQA (Pretraining)', marker='s', markersize=3, alpha=0.8)
+        # Plot MCQA questions
+        plt.plot(mcqa_pretraining['all_stages_tokens'], mcqa_pretraining[y_column],
+                'r-', linewidth=3, label='MCQA (Pretraining)', marker='s', markersize=3, alpha=0.8)
 
-    if len(mcqa_annealing) > 0:
-        plt.plot(mcqa_annealing['temporal_order'], mcqa_annealing['correct_count'],
-                 'r--', linewidth=3, label='MCQA (Annealing)', marker='s', markersize=3, alpha=0.8)
+        if len(mcqa_annealing) > 0:
+            plt.plot(mcqa_annealing['all_stages_tokens'], mcqa_annealing[y_column],
+                    'r--', linewidth=3, label='MCQA (Annealing)', marker='s', markersize=3, alpha=0.8)
 
-    plt.xlabel('Checkpoint (Temporal Order)', fontsize=12)
-    plt.ylabel('Cumulative Correct Answers', fontsize=12)
-    plt.title('Dangerous Capability Emergence by Question Type\\n' +
-              'Cumulative Questions Answered Correctly by Checkpoint', fontsize=14, pad=20)
+        plt.ylabel('Cumulative Correct Answers', fontsize=12)
+
+    plt.xlabel('Tokens Trained', fontsize=12)
+    
+    plt.title('Cumulative Learning of Questions Answered Correctly At Final Checkpoint', fontsize=14, pad=20)
     plt.grid(True, alpha=0.3)
     plt.legend(fontsize=10, loc='upper left')
 
+    min_tok = cloze_df['all_stages_tokens'].min()
+    max_tok = cloze_df['all_stages_tokens'].max()
+    print(min_tok, max_tok)
+
+    ax = plt.gca()
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{int(x/1e9)}B'))
+
+    # Set the x-axis limits to your actual data range
+    all_tokens = pd.concat([cloze_df['all_stages_tokens'], mcqa_df['all_stages_tokens']])
+    min_tok, max_tok = all_tokens.min(), all_tokens.max()
+    ax.set_xlim(min_tok, max_tok)
+
     # Add phase boundary
     if len(cloze_annealing) > 0:
-        boundary = cloze_annealing['temporal_order'].iloc[0]
+        boundary = cloze_annealing['all_stages_tokens'].iloc[0]
         plt.axvline(x=boundary, color='gray', linestyle=':', alpha=0.7, linewidth=2)
-        plt.text(boundary - 8, plt.ylim()[1] * 0.95, 'Pretraining', ha='right', fontsize=10, alpha=0.7)
-        plt.text(boundary + 1, plt.ylim()[1] * 0.95, 'Annealing', ha='left', fontsize=10, alpha=0.7)
+        plt.text(boundary - 10, plt.ylim()[1] * 0.30, 'Pretraining ', ha='right', fontsize=10, alpha=0.7)
+        plt.text(boundary + 10, plt.ylim()[1] * 0.30, ' Annealing', ha='left', fontsize=10, alpha=0.7)
 
-    # Add annotations for final counts
-    cloze_final = progressions['cloze'][-1]['correct_count']
-    mcqa_final = progressions['mcqa'][-1]['correct_count']
-    total_final = cloze_final + mcqa_final
-    breakpoint()
-
-    plt.annotate(f'Final Cloze: {cloze_final}',
-                xy=(len(progressions['cloze'])-1, cloze_final),
-                xytext=(len(progressions['cloze'])-15, cloze_final + 20),
-                arrowprops=dict(arrowstyle='->', alpha=0.6, color='blue'),
-                fontsize=10, color='blue')
-
-    plt.annotate(f'Final MCQA: {mcqa_final}',
-                xy=(len(progressions['mcqa'])-1, mcqa_final),
-                xytext=(len(progressions['mcqa'])-15, mcqa_final - 30),
-                arrowprops=dict(arrowstyle='->', alpha=0.6, color='red'),
-                fontsize=10, color='red')
 
     plt.tight_layout()
 
     # Save both PDF and PNG
-    if save_pdf:
-        plt.savefig(output_dir / 'checkpoint_progression_by_type.pdf', dpi=300, bbox_inches='tight')
-        print(f"📄 PDF plot saved to: {output_dir}/checkpoint_progression_by_type.pdf")
-
-    plt.savefig(output_dir / 'checkpoint_progression_by_type.png', dpi=300, bbox_inches='tight')
-    print(f"🖼️ PNG plot saved to: {output_dir}/checkpoint_progression_by_type.png")
+    plt.savefig(pdf_path, dpi=300, bbox_inches='tight')
+    print(f"📄 PDF plot saved to: {pdf_path}")
 
     plt.close()
 
-if __name__ == "__main__":
+def main():
     tokens_per_step = 4194304
 
-    progressions = print_progression_summary_by_type(tokens_per_step)
+    progress_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/emergence_results_corrected/final_results.json")
+    checkpoint_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/corrected_checkpoints.json")
+    output_dir = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/final_deliverables")
 
-    # Create and save plot
-    plot_checkpoint_progression_by_type(progressions, save_pdf=True)
+    progressions = print_progression_summary_by_type(tokens_per_step, progress_file, checkpoint_file)
+
+    # Create and save plot    
+    plot_checkpoint_progression_by_type(progressions, output_dir, plot_fraction=False)
+    plot_checkpoint_progression_by_type(progressions, output_dir, plot_fraction=True)
 
     # Also save to CSV for easy access
     cloze_df = pd.DataFrame(progressions['cloze'])
     mcqa_df = pd.DataFrame(progressions['mcqa'])
 
-    cloze_output = "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/final_deliverables/checkpoint_progression_cloze.csv"
-    mcqa_output = "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/final_deliverables/checkpoint_progression_mcqa.csv"
+    cloze_output = output_dir / "checkpoint_progression_cloze.csv"
+    mcqa_output = output_dir / "checkpoint_progression_mcqa.csv"
 
     cloze_df.to_csv(cloze_output, index=False)
     mcqa_df.to_csv(mcqa_output, index=False)
 
     print(f"\n💾 Cloze data saved to: {cloze_output}")
     print(f"💾 MCQA data saved to: {mcqa_output}")
+
+
+if __name__ == "__main__":  
+    main()

@@ -41,87 +41,8 @@ def create_emergence_dataset(results: Dict) -> pd.DataFrame:
 
     return pd.DataFrame(data)
 
-def analyze_emergence_patterns(df: pd.DataFrame) -> Dict:
-    """Analyze patterns in the emergence data."""
-    analysis = {}
 
-    # Basic statistics
-    analysis['total_questions'] = len(df)
-    analysis['always_correct'] = df['always_correct'].sum()
-    analysis['never_correct'] = df['never_correct'].sum()
-    analysis['emerged_during_training'] = len(df[~df['always_correct'] & ~df['never_correct']])
-
-    # Emergence step statistics
-    emerged_questions = df[~df['always_correct'] & ~df['never_correct']]
-    if len(emerged_questions) > 0:
-        analysis['emergence_steps'] = {
-            'min': emerged_questions['emergence_step'].min(),
-            'max': emerged_questions['emergence_step'].max(),
-            'mean': emerged_questions['emergence_step'].mean(),
-            'median': emerged_questions['emergence_step'].median(),
-            'std': emerged_questions['emergence_step'].std()
-        }
-
-    # By task category
-    analysis['by_task'] = {}
-    for task in df['task'].unique():
-        task_data = df[df['task'] == task]
-        analysis['by_task'][task] = {
-            'total': len(task_data),
-            'always_correct': task_data['always_correct'].sum(),
-            'never_correct': task_data['never_correct'].sum(),
-            'mean_emergence_step': task_data[~task_data['always_correct'] & ~task_data['never_correct']]['emergence_step'].mean()
-        }
-
-    # By model type
-    analysis['by_model'] = {}
-    for model in df['emergence_model'].unique():
-        model_data = df[df['emergence_model'] == model]
-        analysis['by_model'][model] = {
-            'total': len(model_data),
-            'always_correct': model_data['always_correct'].sum(),
-            'never_correct': model_data['never_correct'].sum()
-        }
-
-    return analysis
-
-def create_visualizations(df: pd.DataFrame, output_dir: Path):
-    """Create visualizations of the emergence patterns."""
-    plt.style.use('default')
-
-    # Emergence step distribution
-    emerged_questions = df[~df['always_correct'] & ~df['never_correct']]
-    if len(emerged_questions) > 0:
-        plt.figure(figsize=(12, 6))
-        plt.hist(emerged_questions['emergence_step'], bins=50, alpha=0.7, edgecolor='black')
-        plt.xlabel('Emergence Step')
-        plt.ylabel('Number of Questions')
-        plt.title('Distribution of Question Emergence Steps')
-        plt.grid(True, alpha=0.3)
-        plt.savefig(output_dir / 'emergence_step_distribution.png', dpi=300, bbox_inches='tight')
-        plt.close()
-
-    # By task category
-    task_summary = df.groupby('task_category').agg({
-        'always_correct': 'sum',
-        'never_correct': 'sum',
-        'emergence_step': ['count', 'mean']
-    }).round(2)
-
-    plt.figure(figsize=(14, 8))
-    task_counts = df['task_category'].value_counts()
-    plt.bar(task_counts.index, task_counts.values)
-    plt.xlabel('Task Category')
-    plt.ylabel('Number of Questions')
-    plt.title('Questions by Task Category')
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    plt.savefig(output_dir / 'questions_by_task.png', dpi=300, bbox_inches='tight')
-    plt.close()
-
-    print(f"Visualizations saved to {output_dir}")
-
-def save_deliverable_dataset(df: pd.DataFrame, analysis: Dict, output_dir: Path):
+def save_deliverable_dataset(df: pd.DataFrame, output_dir: Path):
     """Save the final deliverable dataset."""
 
     # Main dataset
@@ -145,60 +66,6 @@ def save_deliverable_dataset(df: pd.DataFrame, analysis: Dict, output_dir: Path)
         json.dump(step_mapping, f, indent=2)
     print(f"Step mapping saved to {step_mapping_file}")
 
-    # Analysis summary
-    analysis_file = output_dir / 'emergence_analysis_summary.json'
-    with open(analysis_file, 'w') as f:
-        json.dump(analysis, f, indent=2, default=str)
-    print(f"Analysis summary saved to {analysis_file}")
-
-    # Create README for deliverable
-    readme_content = f"""# Question Emergence Analysis Results
-
-## Overview
-This dataset contains the emergence analysis results for {analysis['total_questions']} questions that the Deep Ignorance unfiltered model answers correctly.
-
-## Key Findings
-- **Always Correct**: {analysis['always_correct']} questions ({analysis['always_correct']/analysis['total_questions']*100:.1f}%)
-- **Never Correct**: {analysis['never_correct']} questions ({analysis['never_correct']/analysis['total_questions']*100:.1f}%)
-- **Emerged During Training**: {analysis['emerged_during_training']} questions ({analysis['emerged_during_training']/analysis['total_questions']*100:.1f}%)
-
-## Files
-- `question_emergence_steps.json`: Step number for each question (main deliverable)
-- `question_emergence_dataset.csv`: Full dataset with all metadata
-- `emergence_analysis_summary.json`: Detailed analysis results
-- `emergence_step_distribution.png`: Histogram of emergence steps
-- `questions_by_task.png`: Distribution by task category
-
-## Usage
-```python
-import json
-import pandas as pd
-
-# Load step mapping
-with open('question_emergence_steps.json', 'r') as f:
-    step_mapping = json.load(f)
-
-# Load full dataset
-df = pd.read_csv('question_emergence_dataset.csv')
-
-# Get emergence step for a specific question
-step = step_mapping['wmdp_bio_cloze_verified_2']['emergence_step']
-```
-
-## Data Format
-Each question has:
-- `emergence_step`: First training step where model gets question correct
-- `always_correct`: True if correct from first checkpoint
-- `never_correct`: True if never correct (should be rare)
-- Task and question metadata
-
-Generated on: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
-"""
-
-    readme_file = output_dir / 'README.md'
-    with open(readme_file, 'w') as f:
-        f.write(readme_content)
-    print(f"README saved to {readme_file}")
 
 def main():
     """Main function to compile all results."""
@@ -222,19 +89,8 @@ def main():
     df = create_emergence_dataset(results)
     print(f"Created dataset with {len(df)} questions")
 
-    # Analyze patterns
-    analysis = analyze_emergence_patterns(df)
-    print("Analysis complete:")
-    print(f"- Total questions: {analysis['total_questions']}")
-    print(f"- Always correct: {analysis['always_correct']}")
-    print(f"- Never correct: {analysis['never_correct']}")
-    print(f"- Emerged during training: {analysis['emerged_during_training']}")
-
-    # Create visualizations
-    create_visualizations(df, output_dir)
-
     # Save deliverable dataset
-    save_deliverable_dataset(df, analysis, output_dir)
+    save_deliverable_dataset(df, output_dir)
 
     print(f"\nAll deliverables saved to {output_dir}")
     print("The main deliverable is: question_emergence_steps.json")
