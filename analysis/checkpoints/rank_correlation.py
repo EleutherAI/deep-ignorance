@@ -106,38 +106,6 @@ def plot_correct_over_time(df: pd.DataFrame):
     plt.show()
 
 
-
-
-
-# def plot_correct_over_time(df: pd.DataFrame):
-#     """Plot number of correct questions over training steps, grouped by nickname."""
-#     plt.figure(figsize=(10, 6))
-
-#     for name, group in df.groupby("nickname"):
-#         counts = (
-#             group.groupby("all_stages_step")["correct"]
-#             .sum()
-#             .reset_index()
-#             .sort_values("all_stages_step")
-#         )
-#         plt.plot(
-#             counts["all_stages_step"],
-#             counts["correct"],
-#             label=name.replace("_", " "),
-#             linewidth=2,
-#         )
-
-#     plt.xlabel("Training Step (all_stages_step)")
-#     plt.ylabel("Number of Questions Correct")
-#     plt.title("Number of Questions Correct Over Training Steps")
-#     plt.legend(title="Phase")
-#     plt.grid(True, alpha=0.3)
-#     plt.tight_layout()
-#     plt.show()
-
-#     plt.savefig("correct_over_time.png")
-
-
 def main():
     df = pd.read_json(
         "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/evaluations/all_answers.jsonl",
