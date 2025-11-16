@@ -97,12 +97,6 @@ def main():
         default="/mnt/ssd-1/lucia/deep-ignorance/analysis/results/evaluations",
         help="Directory containing evaluation results",
     )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        required=True,
-        help="Directory to save extracted correct answers",
-    )
 
     unlearning_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/unlearning_annealing_checkpoints.json")
     with open(unlearning_checkpoints_file, "r") as f:
@@ -110,33 +104,65 @@ def main():
     
     pretraining_checkpoints = [checkpoint for checkpoint in full_unlearning_checkpoints if checkpoint["stage"] == "pretraining"]
     pretraining_checkpoints = dicts_to_dict(pretraining_checkpoints, "revision")
-    unlearning_checkpoints = [checkpoint for checkpoint in full_unlearning_checkpoints if checkpoint["stage"] == "annealing"]
-    unlearning_checkpoints = dicts_to_dict(full_unlearning_checkpoints, "revision") 
+    annealing_unlearning = [checkpoint for checkpoint in full_unlearning_checkpoints if checkpoint["stage"] == "annealing"]
+    annealing_unlearning = dicts_to_dict(full_unlearning_checkpoints, "revision") 
 
     annealing_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/annealing_unlearning_checkpoints.json")
     with open(annealing_checkpoints_file, "r") as f:
-        annealing_checkpoints = json.load(f)
-    annealing_checkpoints = dicts_to_dict(annealing_checkpoints, "revision")
+        annealing_unfiltered_checkpoints = json.load(f)
+    annealing_unfiltered_checkpoints = dicts_to_dict(annealing_unfiltered_checkpoints, "revision")
+
+    tampering_gradient_difference_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/gradient_difference_tampering_checkpoints.json")
+    with open(tampering_gradient_difference_checkpoints_file, "r") as f:
+        tampering_gradient_difference_checkpoints = json.load(f)
+    tampering_gradient_difference_checkpoints = dicts_to_dict(tampering_gradient_difference_checkpoints, "revision")
+
+    tampering_gradient_ascent_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/gradient_ascent_tampering_checkpoints.json")
+    with open(tampering_gradient_ascent_checkpoints_file, "r") as f:
+        tampering_gradient_ascent_checkpoints = json.load(f)
+    tampering_gradient_ascent_checkpoints = dicts_to_dict(tampering_gradient_ascent_checkpoints, "revision")
+
+    tampering_unfiltered_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/unfiltered_tampering_checkpoints.json")
+    with open(tampering_unfiltered_checkpoints_file, "r") as f:
+        tampering_unfiltered_checkpoints = json.load(f)
+    tampering_unfiltered_checkpoints = dicts_to_dict(tampering_unfiltered_checkpoints, "revision")
 
     model_data = {
         "deep-ignorance-pretraining-stage-unfiltered": {
             "nickname": "pretraining",
             "stage": "pretraining",
+            "checkpoints": pretraining_checkpoints,
         },
         "deep-ignorance-unfiltered": {
             "nickname": "annealing",
             "stage": "annealing",
+            "checkpoints": annealing_unfiltered_checkpoints,
         },
         "annealing_baseline_ga_v3_interleaved_1_in_50_ga_lr_scale-0.001_gd_lr-0.00012_gclip-0.5": {
             "nickname": "unlearning_annealing",
             "stage": "annealing",
-        }
+            "checkpoints": annealing_unlearning,
+        },
+        "annealing_filtered_gdiff_v1_interleav___gclip-0.5-fp-adversarial-20251110_154702": {
+            "nickname": "gradient_difference_tampering",
+            "stage": "annealing",
+            "checkpoints": tampering_gradient_difference_checkpoints,
+        },
+        "annealing_baseline_ga_v3_interleaved____gclip-0.5-fp-adversarial-20251110_154724": {
+            "nickname": "gradient_ascent_tampering",
+            "stage": "annealing",
+            "checkpoints": tampering_gradient_ascent_checkpoints,
+        },
+        "deep-ignorance-unfiltered-fp-adversarial-20251110_154700": {
+            "nickname": "unfiltered_tampering",
+            "stage": "annealing",
+            "checkpoints": tampering_unfiltered_checkpoints,
+        },
     }
     
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir)
-    output_dir = Path(args.output_dir)
 
     if not results_dir.exists():
         print(f"Error: Results directory {results_dir} does not exist")
@@ -152,12 +178,7 @@ def main():
         
         model_results_dir = results_dir / model_name
         raw_data = process_eval_results(model_results_dir)
-        checkpoints = (
-            annealing_checkpoints 
-            if const_model_data["nickname"] == "annealing" 
-            else unlearning_checkpoints if const_model_data["nickname"] == "unlearning_annealing"
-            else pretraining_checkpoints
-        )
+        checkpoints = model_data["checkpoints"]
 
         for sample in raw_data:
             data.append({
@@ -166,11 +187,9 @@ def main():
                 **{"all_stages_step": checkpoints[sample["global_step"]]["all_stages_step"]}
             })
 
-    # Create output directory
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     # Save a combined file with all correct answers
-    results_jsonl = output_dir / "all_answers.jsonl"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    results_jsonl = results_dir / "all_answers.jsonl"
     with open(results_jsonl, "w") as f:
         for sample in sorted(data, key=lambda x: x["all_stages_step"]):
             f.write(json.dumps(sample) + "\n")

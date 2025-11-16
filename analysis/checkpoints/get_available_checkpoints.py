@@ -8,7 +8,7 @@ from huggingface_hub import HfApi
 from typing import List, Tuple
 import json
 
-from analysis.format_checkpoints import format_checkpoints
+from analysis.checkpoints.format_checkpoints import format_checkpoints
 
 def get_model_revisions(model_name: str) -> List[str]:
     """Get all available revisions for a HuggingFace model."""
@@ -40,6 +40,11 @@ def parse_global_step(revision: str):
     """Parse global step number from revision name."""
     # Look for patterns like "global_step100128"
     match = re.match(r'global_step(\d+)', revision)
+    if match:
+        return int(match.group(1))
+
+    # Look for patterns like "tampering_step_100128"
+    match = re.match(r'tampering_step_(\d+)', revision)
     if match:
         return int(match.group(1))
 
@@ -85,7 +90,7 @@ def save_available_checkpoints(
 
 
 def main():
-    hf_models = {
+    all_hf_models = {
         "EleutherAI/deep-ignorance-pretraining-stage-unfiltered": {
             "stage": "pretraining",
         },
@@ -95,10 +100,22 @@ def main():
         "EleutherAI/annealing_baseline_ga_v3_interleaved_1_in_50_ga_lr_scale-0.001_gd_lr-0.00012_gclip-0.5": {
             "stage": "annealing",
         },
+        "EleutherAI/deep-ignorance-random-init-fp-adversarial-20251110_154659": {
+            "stage": "annealing",
+        },
+        "EleutherAI/annealing_filtered_gdiff_v1_interleav___gclip-0.5-fp-adversarial-20251110_154702": {
+            "stage": "annealing",
+        },
+        "EleutherAI/annealing_baseline_ga_v3_interleaved____gclip-0.5-fp-adversarial-20251110_154724": {
+            "stage": "annealing",
+        },
+        "EleutherAI/deep-ignorance-unfiltered-fp-adversarial-20251110_154700": {
+            "stage": "annealing",
+        },
     }
     checkpoints_file = f"/mnt/ssd-1/lucia/deep-ignorance/analysis/results/available_checkpoints.json"
 
-    save_available_checkpoints(hf_models, checkpoints_file)
+    save_available_checkpoints(all_hf_models, checkpoints_file)
 
     print(f"Setting up metadata for deep ignorance unfiltered run...")
     hf_models = {
@@ -118,6 +135,32 @@ def main():
     output_path = f'/mnt/ssd-1/lucia/deep-ignorance/analysis/results/{model_nickname}_checkpoints.json'
     format_checkpoints(checkpoints_file, output_path, hf_models) 
 
+    print(f"Setting up metadata for unfiltered tampering run...")
+    hf_models = {
+        "pretraining": "EleutherAI/deep-ignorance-pretraining-stage-unfiltered",
+        "annealing": "EleutherAI/deep-ignorance-unfiltered-fp-adversarial-20251110_154700"
+    }
+    model_nickname = "unfiltered_tampering"
+    output_path = f'/mnt/ssd-1/lucia/deep-ignorance/analysis/results/{model_nickname}_checkpoints.json'
+    format_checkpoints(checkpoints_file, output_path, hf_models)
+
+    print(f"Setting up metadata for gradient difference tampering run...")
+    hf_models = {
+        "pretraining": "EleutherAI/deep-ignorance-pretraining-stage-unfiltered",
+        "annealing": "EleutherAI/annealing_filtered_gdiff_v1_interleav___gclip-0.5-fp-adversarial-20251110_154702"
+    }
+    model_nickname = "gradient_difference_tampering"
+    output_path = f'/mnt/ssd-1/lucia/deep-ignorance/analysis/results/{model_nickname}_checkpoints.json'
+    format_checkpoints(checkpoints_file, output_path, hf_models)
+
+    print(f"Setting up metadata for GA tampering run...")
+    hf_models = {
+        "pretraining": "EleutherAI/deep-ignorance-pretraining-stage-unfiltered",
+        "annealing": "EleutherAI/annealing_baseline_ga_v3_interleaved____gclip-0.5-fp-adversarial-20251110_154724"
+    }
+    model_nickname = "gradient_ascent_tampering"
+    output_path = f'/mnt/ssd-1/lucia/deep-ignorance/analysis/results/{model_nickname}_checkpoints.json'
+    format_checkpoints(checkpoints_file, output_path, hf_models)
 
 if __name__ == "__main__":
     main()

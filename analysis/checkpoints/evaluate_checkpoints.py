@@ -102,22 +102,27 @@ def distribute_evaluations_single_node(
 
 
 def main():
+    # Source
     checkpoints_file = "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/available_checkpoints.json"
     with open(checkpoints_file, "r") as f:
         checkpoints = json.load(f)
 
-    # Models to analyze
-    models = {
-        "pretraining": "EleutherAI/deep-ignorance-pretraining-stage-unfiltered",
-        "annealing": "EleutherAI/deep-ignorance-unfiltered",
-        "unlearning_annealing": "EleutherAI/annealing_baseline_ga_v3_interleaved_1_in_50_ga_lr_scale-0.001_gd_lr-0.00012_gclip-0.5"
-    }
-
+    # Destination
     results_dir = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/evaluations")
 
-    for stage, model_name in models.items():
+    # Models to analyze
+    model_names = [
+        "EleutherAI/deep-ignorance-pretraining-stage-unfiltered",
+        "EleutherAI/deep-ignorance-unfiltered",
+        "EleutherAI/annealing_baseline_ga_v3_interleaved_1_in_50_ga_lr_scale-0.001_gd_lr-0.00012_gclip-0.5",
+        "EleutherAI/deep-ignorance-unfiltered-fp-adversarial-20251110_154700",
+        "EleutherAI/annealing_filtered_gdiff_v1_interleav___gclip-0.5-fp-adversarial-20251110_154702",
+        "EleutherAI/annealing_baseline_ga_v3_interleaved____gclip-0.5-fp-adversarial-20251110_154724",
+    ]
+
+    for model_name in model_names:
         revisions = [
-            checkpoint['revision'] for checkpoint in checkpoints[stage]
+            checkpoint['revision'] for checkpoint in checkpoints[model_name]
         ]
         print(f"Evaluating {model_name} with {len(revisions)} revisions")
         print(f"Revisions: {revisions}")
