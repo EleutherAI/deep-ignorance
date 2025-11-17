@@ -49,6 +49,7 @@ dependencies = [
     "lm_eval",
     "flash_attn",
     "huggingface_hub",
+    "sparsify",
 ]
 
 [tool.setuptools.packages.find]
