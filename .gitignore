@@ -17,3 +17,13 @@ runs/
 *.bat
 *.bak
 *.dat
+
+
+eval_results/
+uv.lock
+settings.local.json
+dependency_links.txt
+PKG-INFO
+requires.txt
+SOURCES.txt
+top_level.txt
