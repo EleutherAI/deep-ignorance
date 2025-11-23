@@ -1,26 +1,6 @@
 import pandas as pd
-from scipy.stats import spearmanr, pearsonr
+from scipy.stats import spearmanr
 import matplotlib.pyplot as plt
-
-from analysis.utils import assert_type
-
-
-# def get_stably_learned_step(question_df: pd.DataFrame):
-#     incorrect_steps = question_df[~question_df["correct"]]["all_stages_step"]
-#     correct_steps = question_df[question_df["correct"]]["all_stages_step"]
-    
-#     if len(incorrect_steps) == 0:
-#         # Always correct, return first correct step
-#         return correct_steps.min()
-    
-#     last_incorrect = incorrect_steps.max()
-#     steps_after_last_incorrect = correct_steps[correct_steps > last_incorrect]
-    
-#     if len(steps_after_last_incorrect) > 0:
-#         return steps_after_last_incorrect.min()
-
-#     # Always incorrect, filter out
-#     return None
 
 
 def plot_correct_over_time(df: pd.DataFrame):
@@ -116,78 +96,6 @@ def spearman_by_task(first, second):
     spearman_rank_correlation("All tasks (combined)", common_docs, learning_steps, unlearning_steps)
     spearman_rank_correlation("WMDP Bio Cloze Verified", cloze_docs, learning_steps, unlearning_steps)
     spearman_rank_correlation("WMDP Bio Robust MCQA", other_docs, learning_steps, unlearning_steps)
-
-
-# def filter_unstably_learned_questions(
-#     pretrain: pd.DataFrame, verbose: bool = True
-# ) -> pd.DataFrame:
-#     """Remove items that are not correct at the final pretraining step."""
-#     pretrain = pretrain.sort_values("all_stages_step")
-
-#     # Identify final-step correctness per (task, doc_id) pair
-#     final_pretrain_correct = pretrain.groupby(["task", "doc_id"])["correct"].last()
-#     stable_pretrain_ids = final_pretrain_correct[final_pretrain_correct].index
-
-#     # Build stable-only dataframe
-#     stable_pretrain = (
-#         pretrain.set_index(["task", "doc_id"]).loc[stable_pretrain_ids].reset_index()
-#     )
-#     stable_pretrain = assert_type(pd.DataFrame, stable_pretrain)
-
-#     if verbose:
-#         final_step = pretrain["all_stages_step"].max()
-#         final_step_data = pretrain[pretrain["all_stages_step"] == final_step]
-#         print(f"Final pretraining step: {final_step}")
-#         print(
-#             f"Correct at final pretraining step: {final_step_data['correct'].sum()} / {len(final_step_data)}"
-#         )
-
-#         # Use the same unit for counts: unique (task, doc_id) pairs
-#         total_pairs = len(
-#             final_pretrain_correct
-#         )  # same as pretrain.groupby(["task","doc_id"]).ngroups
-#         unstable_pretrain_ids = set(final_pretrain_correct.index) - set(
-#             stable_pretrain_ids
-#         )
-
-#         ever_correct = pretrain.groupby(["task", "doc_id"])["correct"].any()
-#         transient_learners = ever_correct[ever_correct].index.difference(
-#             stable_pretrain_ids
-#         )
-
-#         print(
-#             f"Excluded {len(unstable_pretrain_ids)} unstably learned pretraining questions "
-#             f"(out of {total_pairs}); "
-#             f"{len(transient_learners)} of these correct at step(/s) other than the final one."
-#         )
-
-#     return stable_pretrain
-
-
-# def filter_unstably_unlearned_questions(
-#     unlearn: pd.DataFrame, verbose: bool = True
-# ) -> pd.DataFrame:
-#     """Remove items that are not incorrect at the final unlearning step."""
-#     unlearn = unlearn.sort_values("all_stages_step")
-
-#     final_unlearn_incorrect = ~unlearn.groupby(["task", "doc_id"])["correct"].last()
-#     stable_unlearn_ids = final_unlearn_incorrect[final_unlearn_incorrect].index
-
-#     stable_unlearn = (
-#         unlearn.set_index(["task", "doc_id"]).loc[stable_unlearn_ids].reset_index()
-#     )
-#     stable_unlearn = assert_type(pd.DataFrame, stable_unlearn)
-
-#     if verbose:
-#         unstable_unlearn_ids = set(final_unlearn_incorrect.index) - set(
-#             stable_unlearn_ids
-#         )
-#         print(
-#             f"Excluded {len(unstable_unlearn_ids)} unstably unlearned questions "
-#             f"(out of {len(final_unlearn_incorrect)})."
-#         )
-
-#     return stable_unlearn
 
 
 def get_stable_learn_step(question_df: pd.DataFrame):
