@@ -3,16 +3,13 @@
 Deep Ignorance Model Analysis: SVCCA Comparison
 Downloads models from Hugging Face and performs per-layer SVCCA analysis.
 """
-from contextlib import contextmanager
 from typing import Any
 import re
 from argparse import ArgumentParser
 from pathlib import Path
 
 from collections import defaultdict
-from functools import partial
 from torch import nn
-import shelve
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -144,7 +141,7 @@ def extract_layer_idx(name: str) -> int | None:
     return None
 
 
-def load_and_tokenize(dataset_name: str, N: int, model_name: str):
+def load_and_tokenize(dataset_name: str, N: int, model_name: str, batch_size: int):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     if dataset_name == "cais/wmdp":
@@ -207,8 +204,8 @@ def get_module_info(
     model_names: tuple[str, str],
     dataset: Dataset,
     device: str,
+    batch_size: int,
     module_batch_size: int = 128,
-    debug: bool = False,
     target_layers: list[int] | None = None,
 ):
     # Modulate CPU RAM usage by batching module similarities
@@ -259,15 +256,6 @@ def get_module_info(
         for name in model_names
     ]
 
-    if debug:
-        # Only collect first k modules
-        num_modules = 10
-        target_module_info = {
-            k: v
-            for k, v in target_module_info.items()
-            if k in list(target_module_info.keys())[:num_modules]
-        }
-
     module_batches = [
         list(target_module_info.keys())[i : i + module_batch_size]
         for i in range(0, len(target_module_info), module_batch_size)
@@ -276,17 +264,16 @@ def get_module_info(
         collected_activations = []
         for model, model_name in zip(models, model_names):
             collected_activations.append(
-                collect_module_activations(model, model_name, modules, dataset)
+                collect_module_activations(model, model_name, modules, dataset, batch_size=batch_size)
             )
 
         for module in tqdm(modules, desc=f"Computing SVCCA for {len(modules)} modules"):
-            print(collected_activations[0][module].shape, collected_activations[1][module].shape)
             first_model_acts = (
-                torch.cat([item[module].to(device) for item in collected_activations[0]], dim=0)
+                torch.cat([item[module].to(device).flatten(0, 1) for item in collected_activations[0]], dim=0)
                 .to(torch.float32)
             )
             second_model_acts = (
-                torch.cat([item[module].to(device) for item in collected_activations[1]], dim=0)
+                torch.cat([item[module].to(device).flatten(0, 1) for item in collected_activations[1]], dim=0)
                 .to(torch.float32)
             )
 
@@ -311,14 +298,14 @@ def get_module_info(
 def main(args):
     logger.info(f"Using the first model to tokenize the dataset: {args.models[0]}")
 
-    dataset = load_and_tokenize(args.dataset_name, N=args.N, model_name=args.models[0])
+    dataset = load_and_tokenize(args.dataset_name, N=args.N, model_name=args.models[0], batch_size=args.batch_size)
 
     module_info = get_module_info(
-        tuple(args.models), dataset, args.device, debug=args.debug, target_layers=args.target_layers
+        tuple(args.models), dataset, args.device, batch_size=args.batch_size, target_layers=args.target_layers
     )
 
     file_name = (
-        f"layer_sims_{args.dataset_name.split('/')[-1]}{'debug' if args.debug else ''}"
+        f"layer_sims_{args.dataset_name.split('/')[-1]}"
         f"_N={len(dataset)}_n_layers={len(args.target_layers)}.png"
     )
     file_path = Path("analysis/results/svcca") / file_name
@@ -336,8 +323,8 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_name", type=str, default="cais/wmdp")
     parser.add_argument("--target_layers", nargs="+", default=None)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--debug", action="store_true")
     parser.add_argument("--N", type=int, default=512)
+    parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument(
         "--models",
         nargs="+",

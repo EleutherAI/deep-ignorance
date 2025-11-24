@@ -29,12 +29,14 @@ def collect_activations(
     activations = {}
     handles = []
 
+    offload_device = torch.device("cpu")
+
     def create_input_hook(hookpoint: str):
         def input_hook(module: nn.Module, input: Any, output: Any) -> None:
             if isinstance(input, tuple):
-                activations[hookpoint] = input[0].detach().cpu()
+                activations[hookpoint] = input[0].to(device=offload_device, non_blocking=True)
             else:
-                activations[hookpoint] = input.detach().cpu()
+                activations[hookpoint] = input.to(device=offload_device, non_blocking=True)
 
             if token != None:
                 activations[hookpoint] = activations[hookpoint][:, token]
@@ -44,11 +46,11 @@ def collect_activations(
     def create_output_hook(hookpoint: str):
         def output_hook(module: nn.Module, input: Any, output: Any) -> None:
             if isinstance(output, tuple):
-                activations[hookpoint] = output[0].detach().cpu()
+                activations[hookpoint] = output[0].to(device=offload_device, non_blocking=True)
             else:
-                activations[hookpoint] = output.detach().cpu()
+                activations[hookpoint] = output.to(device=offload_device, non_blocking=True)
 
-            if token != -1:
+            if token != None:
                 activations[hookpoint] = activations[hookpoint][:, token]
 
         return output_hook
