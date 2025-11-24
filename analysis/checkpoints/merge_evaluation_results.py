@@ -98,7 +98,7 @@ def main():
         help="Directory containing evaluation results",
     )
 
-    unlearning_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/unlearning_annealing_checkpoints.json")
+    unlearning_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/checkpoints/unlearning_annealing_checkpoints.json")
     with open(unlearning_checkpoints_file, "r") as f:
         full_unlearning_checkpoints = json.load(f)
     
@@ -107,22 +107,22 @@ def main():
     annealing_unlearning = [checkpoint for checkpoint in full_unlearning_checkpoints if checkpoint["stage"] == "annealing"]
     annealing_unlearning = dicts_to_dict(full_unlearning_checkpoints, "revision") 
 
-    annealing_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/annealing_unlearning_checkpoints.json")
+    annealing_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/checkpoints/annealing_unlearning_checkpoints.json")
     with open(annealing_checkpoints_file, "r") as f:
         annealing_unfiltered_checkpoints = json.load(f)
     annealing_unfiltered_checkpoints = dicts_to_dict(annealing_unfiltered_checkpoints, "revision")
 
-    tampering_gradient_difference_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/gradient_difference_tampering_checkpoints.json")
+    tampering_gradient_difference_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/checkpoints/gradient_difference_tampering_checkpoints.json")
     with open(tampering_gradient_difference_checkpoints_file, "r") as f:
         tampering_gradient_difference_checkpoints = json.load(f)
     tampering_gradient_difference_checkpoints = dicts_to_dict(tampering_gradient_difference_checkpoints, "revision")
 
-    tampering_gradient_ascent_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/gradient_ascent_tampering_checkpoints.json")
+    tampering_gradient_ascent_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/checkpoints/gradient_ascent_tampering_checkpoints.json")
     with open(tampering_gradient_ascent_checkpoints_file, "r") as f:
         tampering_gradient_ascent_checkpoints = json.load(f)
     tampering_gradient_ascent_checkpoints = dicts_to_dict(tampering_gradient_ascent_checkpoints, "revision")
 
-    tampering_unfiltered_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/unfiltered_tampering_checkpoints.json")
+    tampering_unfiltered_checkpoints_file = Path("/mnt/ssd-1/lucia/deep-ignorance/analysis/results/checkpoints/unfiltered_tampering_checkpoints.json")
     with open(tampering_unfiltered_checkpoints_file, "r") as f:
         tampering_unfiltered_checkpoints = json.load(f)
     tampering_unfiltered_checkpoints = dicts_to_dict(tampering_unfiltered_checkpoints, "revision")

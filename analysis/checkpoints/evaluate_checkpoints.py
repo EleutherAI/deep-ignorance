@@ -103,7 +103,7 @@ def distribute_evaluations_single_node(
 
 def main():
     # Source
-    checkpoints_file = "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/available_checkpoints.json"
+    checkpoints_file = "/mnt/ssd-1/lucia/deep-ignorance/analysis/results/checkpoints/available_checkpoints.json"
     with open(checkpoints_file, "r") as f:
         checkpoints = json.load(f)
 
