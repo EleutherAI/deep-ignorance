@@ -39,7 +39,6 @@ logger.addHandler(handler)
 # import warnings
 # warnings.filterwarnings("ignore")
 
-
 def module_group_map(module_name: str) -> str:
     """Map module name to group name."""
     if "mlp" in module_name:
@@ -186,8 +185,9 @@ def collect_module_activations(
     target_modules: list[str],
     dataset: Dataset,
     debug: bool = False,
+    batch_size: int = 1,
 ) -> list[dict[str, torch.Tensor]]:
-    dl = DataLoader(dataset, batch_size=1, shuffle=False)  # type: ignore
+    dl = DataLoader(dataset, batch_size=batch_size, shuffle=False)  # type: ignore
 
     module_activations = []
     for batch in tqdm(dl, desc=f"Collecting activations for {model_name}"):
@@ -197,7 +197,7 @@ def collect_module_activations(
             model(batch["input_ids"].to(model.device))
 
             module_activations.append(
-                {name: activations[name].squeeze() for name in target_modules}
+                {name: activations[name] for name in target_modules}
             )
 
     return module_activations
@@ -209,6 +209,7 @@ def get_module_info(
     device: str,
     module_batch_size: int = 128,
     debug: bool = False,
+    target_layers: list[int] | None = None,
 ):
     # Modulate CPU RAM usage by batching module similarities
     print(f"module_batch_size: {module_batch_size}")
@@ -220,10 +221,10 @@ def get_module_info(
     target_module_info = {}
     for name, module in named_modules:
         if (
-            isinstance(module, nn.Embedding)
-            or isinstance(module, nn.Linear)
-            or "layernorm" in name
-            or "ln" in name
+            isinstance(module, nn.Linear) # or 
+            # isinstance(module, nn.Embedding)
+            # or "layernorm" in name
+            # or "ln" in name
         ):
             layer = extract_layer_idx(name)
             if layer is None:
@@ -231,11 +232,19 @@ def get_module_info(
                     f"Skipping {name} because it doesn't match the layer pattern"
                 )
                 continue
+            if target_layers is not None and str(layer) not in target_layers:
+                logger.debug(f"Skipping {name} because {layer} is not in the target layers {target_layers}")
+                continue
 
             group = module_group_map(name)
             if group == "other":
                 logger.debug(f"Skipping {name} because it's in the 'other' group")
                 continue
+
+            if target_layers is not None:
+                if any(info.get("group") == group and info.get("layer") == layer for info in target_module_info.values()):
+                    logger.debug(f"Skipping {name} because {group} {layer} is already in the target module info")
+                    continue
 
             target_module_info[name] = {
                 "layer": layer,
@@ -271,6 +280,7 @@ def get_module_info(
             )
 
         for module in tqdm(modules, desc=f"Computing SVCCA for {len(modules)} modules"):
+            print(collected_activations[0][module].shape, collected_activations[1][module].shape)
             first_model_acts = (
                 torch.cat([item[module].to(device) for item in collected_activations[0]], dim=0)
                 .to(torch.float32)
@@ -303,24 +313,13 @@ def main(args):
 
     dataset = load_and_tokenize(args.dataset_name, N=args.N, model_name=args.models[0])
 
-    if args.debug:
-        cache = {}
-        cache["module_info"] = get_module_info(
-            tuple(args.models), dataset, args.device, debug=args.debug
-        )
-    else:
-        with shelve.open(f"cache/{args.cache_name}") as cache:
-            if "module_info" not in cache:
-                cache["module_info"] = get_module_info(
-                    tuple(args.models), dataset, args.device, debug=args.debug
-                )
-
-            module_info = cache["module_info"]
+    module_info = get_module_info(
+        tuple(args.models), dataset, args.device, debug=args.debug, target_layers=args.target_layers
+    )
 
     file_name = (
-        f"layer_sims_{args.dataset_name.split('/')[-1]}"
-        f"{args.cache_name}{args.debug}"
-        f"_N={len(dataset)}.png"
+        f"layer_sims_{args.dataset_name.split('/')[-1]}{'debug' if args.debug else ''}"
+        f"_N={len(dataset)}_n_layers={len(args.target_layers)}.png"
     )
     file_path = Path("analysis/results/svcca") / file_name
     file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -333,8 +332,9 @@ def main(args):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--cache_name", type=str, default="test512.3")
+    parser.add_argument("--cache_name", type=str, default="uncached")
     parser.add_argument("--dataset_name", type=str, default="cais/wmdp")
+    parser.add_argument("--target_layers", nargs="+", default=None)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--N", type=int, default=512)
