@@ -313,6 +313,8 @@ def get_module_info(
                 .to(torch.float32)
             )
 
+            print(torch.cuda.memory_allocated() / 1024**3, "GB")
+
             target_module_info[module]["sim"] = (
                 1.0
                 - svcca_distance(  # type: ignore
@@ -360,7 +362,7 @@ if __name__ == "__main__":
     parser.add_argument("--target_layers", nargs="+", default=None)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--N", type=int, default=512)
-    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument(
         "--models",
         nargs="+",
