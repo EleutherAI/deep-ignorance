@@ -573,7 +573,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--cache_name", type=str, default="test512.2")
+    parser.add_argument("--cache_name", type=str, default="test512.3")
 
     # dataset_name = "RonenEldan/TinyStories"
     # dataset_name = "EleutherAI/deep-ignorance-annealing-mix"
@@ -585,6 +585,7 @@ if __name__ == "__main__":
         nargs="+",
         default=[
             "EleutherAI/deep-ignorance-unfiltered",
+            # EleutherAI/deep-ignorance-e2e-strong-filter
             "EleutherAI/deep-ignorance-e2e-weak-filter",
         ],
     )

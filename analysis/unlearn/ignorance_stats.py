@@ -21,10 +21,15 @@ from analysis.data import setup_data_pipeline, DataConfig
 # Configuration
 ORG_NAME = "open-unlearning"
 TASK_TAG = "tofu"
+# TASK_TAG = "wmdp"
 BASE_MODEL = "Meta-Llama/Llama-3.2-1B-Instruct"
 BASE_MODEL_TAG = "Llama-3.2-1B-Instruct"
 DATASET_NAME = "locuslab/tofu"
+# DATASET_NAME = "cais/wmdp"
 FORGET_SPLIT_TAG = "forget10"
+# FORGET_SPLIT_TAG = "wmdp-bio"
+SPLIT = "train"
+# SPLIT = "test"
 
 ALGO_ALIASES = {
     "AltPO": ["AltPO"],
@@ -121,14 +126,14 @@ def analyze(model: PreTrainedModel, dataset: Dataset, batch_size: int):
 
             # --- Loss Calculation ---
             loss = outputs.loss.item()
-            current_batch_size = input_ids.size(0)
-            total_loss += loss * current_batch_size
-            count_samples += current_batch_size
+            num_seqs = input_ids.size(0)
+            total_loss += loss * num_seqs
+            count_samples += num_seqs
 
             # Accuracy Calculation
             predictions = outputs.logits.argmax(dim=-1)
             accuracy = (predictions == labels).float().mean().item()
-            total_accuracy += accuracy * current_batch_size
+            total_accuracy += accuracy * num_seqs
 
             # --- Hidden State Norm Calculation ---
             # hidden_states is a tuple of tensors (one for embeddings + one for each layer)
@@ -155,13 +160,15 @@ def analyze(model: PreTrainedModel, dataset: Dataset, batch_size: int):
                 total_hidden_norms[layer_idx] += masked_norms.sum().item()
 
     # Calculate averages
-    avg_loss = total_loss / count_samples if count_samples > 0 else float("nan")
+    avg_loss = total_loss / count_samples
+    avg_accuracy = total_accuracy / count_samples
 
-    avg_accuracy = total_accuracy / count_samples if count_samples > 0 else float("nan")
-
-    avg_hidden_norms = []
-    if total_valid_tokens > 0 and total_hidden_norms is not None:
-        avg_hidden_norms = [s / total_valid_tokens for s in total_hidden_norms]
+    if total_hidden_norms is not None:
+        avg_hidden_norms = [
+            s / total_valid_tokens for s in total_hidden_norms
+        ]
+    else:
+        avg_hidden_norms = []
 
     return {
         "loss": avg_loss,
@@ -237,12 +244,14 @@ def main():
     device = "cuda"
     output_file = Path(f"analysis/results/unlearning/{args.run_name}.csv")
     model_ids_file = Path(f"analysis/results/unlearning/{args.run_name}.json")
+    norms_plot_file = Path(f"analysis/results/unlearning/{args.run_name}_unlearning_norms.png")
+    output_file.parent.mkdir(parents=True, exist_ok=True)
 
     data_config = DataConfig(
         model=BASE_MODEL,
         dataset=DATASET_NAME,
         subset=FORGET_SPLIT_TAG,
-        split="train",
+        split=SPLIT,
         data_args="",
         prompt_column="question",
         completion_column="answer",
@@ -304,6 +313,7 @@ def main():
         df_algorithm = df[df["Algorithm"] == algorithm]
         norms = df_algorithm["Hidden State Norms"].iloc[0]
         if isinstance(norms, str):
+            # Convert string to list
             norms = ast.literal_eval(norms)
 
         plt.plot(list(range(len(norms))), norms, label=algorithm)
@@ -313,7 +323,7 @@ def main():
     plt.ylabel("Mean Hidden State Norm")
 
     plt.legend()
-    plt.savefig("analysis/results/unlearning/unlearning_norms.png")
+    plt.savefig(norms_plot_file)
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ def tokenize(batch: dict, *, args: DataConfig, tokenizer):
         return_length=True,
         truncation=args.truncation,
         padding="max_length",  # Enable padding to max_length
-        max_length=args.max_length if hasattr(args, 'max_length') else 2048,  # Set max length
+        max_length=args.max_length,  # Set max length
     )
     
     if args.completion_column:
@@ -39,7 +39,7 @@ def tokenize(batch: dict, *, args: DataConfig, tokenizer):
         convos = [
             [
                 {"role": "user", "content": assert_type(str, prompt)},
-                {"role": "assistant", "content": assert_type(str, resp)},
+                {"role": "assistant", "content": resp if isinstance(resp, str) else " ".join(resp)},
             ]
             for prompt, resp in zip(
                 batch[args.prompt_column], batch[args.completion_column]
