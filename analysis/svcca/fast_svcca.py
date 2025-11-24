@@ -9,6 +9,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from torch import nn
 import torch
 import numpy as np
@@ -35,6 +36,7 @@ logger.addHandler(handler)
 
 # import warnings
 # warnings.filterwarnings("ignore")
+
 
 def module_group_map(module_name: str) -> str:
     """Map module name to group name."""
@@ -99,10 +101,11 @@ def plot_similarities(
             if len(values) > 1:
                 std_errs.append(np.std(values) / np.sqrt(len(values)))
             else:
-                std_errs.append(0)   # keep array aligned
+                std_errs.append(0)  # keep array aligned
 
         plt.plot(
-            unique_layers, means,
+            unique_layers,
+            means,
             linestyle=linestyle,
             color=color,
             label=label,
@@ -115,7 +118,6 @@ def plot_similarities(
             lo = [m - e for m, e in zip(means, std_errs)]
             hi = [m + e for m, e in zip(means, std_errs)]
             plt.fill_between(unique_layers, lo, hi, alpha=0.3, color=color)
-
 
     plt.xlabel("Layer Index")
     plt.ylabel("SVCCA Similarity")
@@ -141,18 +143,23 @@ def extract_layer_idx(name: str) -> int | None:
     return None
 
 
-def load_and_tokenize(dataset_name: str, N: int, model_name: str, batch_size: int):
+def load_and_tokenize(dataset_name: str, subset: str, N: int, model_name: str):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # Set pad token if not already set
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    if dataset_name == "cais/wmdp":
-        dataset = load_dataset(dataset_name, "wmdp-bio", split="test")
-        dataset = assert_type(Dataset, dataset)
+    if dataset_name == "cais/wmdp" or dataset_name == "cais/mmlu":
+        if subset:
+            dataset = load_dataset(dataset_name, subset, split="test")
+        else:
+            dataset = load_dataset(dataset_name, split="test")
 
-        def map_bio(x):
+        dataset = assert_type(Dataset, dataset)
+        dataset = dataset.select(range(N))
+
+        def map_mcqa(x):
             choices = [f"{i}. {choice}" for i, choice in enumerate(x["choices"])]
             prompt = " \n ".join(
                 [x["question"]]
@@ -167,13 +174,11 @@ def load_and_tokenize(dataset_name: str, N: int, model_name: str, batch_size: in
                 ),
             }
 
-        dataset = dataset.map(map_bio)
+        dataset = dataset.map(map_mcqa)
     else:
-        dataset = load_dataset(dataset_name, split=f"train[:{10_000}]")
+        dataset = load_dataset(dataset_name, split=f"train[:{N}]")
         dataset = assert_type(Dataset, dataset)
         dataset = dataset.map(lambda x: {"input_ids": tokenizer.encode(x["text"])})
-
-    dataset = dataset.select(range(N))
 
     # Sort by length to minimize padding
     dataset = dataset.map(lambda x: {"length": len(x["input_ids"])})
@@ -209,12 +214,16 @@ def collect_module_activations(
         padded_attention_mask = []
         for ids, mask in zip(input_ids, attention_mask):
             padding_len = max_len - len(ids)
-            padded_input_ids.append(torch.cat([ids, torch.zeros(padding_len, dtype=ids.dtype)]))
-            padded_attention_mask.append(torch.cat([mask, torch.zeros(padding_len, dtype=mask.dtype)]))
+            padded_input_ids.append(
+                torch.cat([ids, torch.zeros(padding_len, dtype=ids.dtype)])
+            )
+            padded_attention_mask.append(
+                torch.cat([mask, torch.zeros(padding_len, dtype=mask.dtype)])
+            )
 
         return {
             "input_ids": torch.stack(padded_input_ids),
-            "attention_mask": torch.stack(padded_attention_mask)
+            "attention_mask": torch.stack(padded_attention_mask),
         }
 
     dl = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)  # type: ignore
@@ -226,7 +235,7 @@ def collect_module_activations(
         ) as activations:
             model(
                 input_ids=batch["input_ids"].to(model.device),
-                attention_mask=batch["attention_mask"].to(model.device)
+                attention_mask=batch["attention_mask"].to(model.device),
             )
 
             module_activations.append(
@@ -236,6 +245,47 @@ def collect_module_activations(
     return module_activations
 
 
+def compute_svcca_for_module(
+    module: str,
+    gpu_id: int,
+    collected_activations_0: list[dict[str, torch.Tensor]],
+    collected_activations_1: list[dict[str, torch.Tensor]],
+) -> tuple[str, float]:
+    """Compute SVCCA for a single module on a specific GPU."""
+    device = f"cuda:{gpu_id}"
+
+    first_model_acts = torch.cat(
+        [
+            item[module].to(device, non_blocking=True).flatten(0, 1)
+            for item in collected_activations_0
+        ],
+        dim=0,
+    ).to(torch.float32)
+    second_model_acts = torch.cat(
+        [
+            item[module].to(device, non_blocking=True).flatten(0, 1)
+            for item in collected_activations_1
+        ],
+        dim=0,
+    ).to(torch.float32)
+
+    similarity = (
+        1.0
+        - svcca_distance(
+            first_model_acts,
+            second_model_acts,
+            0.99,
+            "svd",
+        ).item()
+    )
+
+    # Free GPU memory
+    del first_model_acts, second_model_acts
+    torch.cuda.empty_cache()
+
+    return module, similarity
+
+
 def get_module_info(
     model_names: tuple[str, str],
     dataset: Dataset,
@@ -243,9 +293,11 @@ def get_module_info(
     batch_size: int,
     module_batch_size: int = 128,
     target_layers: list[int] | None = None,
+    num_gpus: int = 8,
 ):
     # Modulate CPU RAM usage by batching module similarities
     print(f"module_batch_size: {module_batch_size}")
+    print(f"num_gpus: {num_gpus}")
 
     named_modules = AutoModelForCausalLM.from_pretrained(
         model_names[0]
@@ -254,7 +306,7 @@ def get_module_info(
     target_module_info = {}
     for name, module in named_modules:
         if (
-            isinstance(module, nn.Linear) # or 
+            isinstance(module, nn.Linear)  # or
             # isinstance(module, nn.Embedding)
             # or "layernorm" in name
             # or "ln" in name
@@ -266,7 +318,9 @@ def get_module_info(
                 )
                 continue
             if target_layers is not None and str(layer) not in target_layers:
-                logger.debug(f"Skipping {name} because {layer} is not in the target layers {target_layers}")
+                logger.debug(
+                    f"Skipping {name} because {layer} is not in the target layers {target_layers}"
+                )
                 continue
 
             group = module_group_map(name)
@@ -275,8 +329,13 @@ def get_module_info(
                 continue
 
             if target_layers is not None:
-                if any(info.get("group") == group and info.get("layer") == layer for info in target_module_info.values()):
-                    logger.debug(f"Skipping {name} because {group} {layer} is already in the target module info")
+                if any(
+                    info.get("group") == group and info.get("layer") == layer
+                    for info in target_module_info.values()
+                ):
+                    logger.debug(
+                        f"Skipping {name} because {group} {layer} is already in the target module info"
+                    )
                     continue
 
             target_module_info[name] = {
@@ -287,89 +346,112 @@ def get_module_info(
     logger.debug(f"Grouped target modules: {list(target_module_info.keys())}")
     logging.info("Collecting output activations...")
 
-    models = [
-        AutoModelForCausalLM.from_pretrained(name, device_map="auto")
-        for name in model_names
-    ]
-
     module_batches = [
         list(target_module_info.keys())[i : i + module_batch_size]
         for i in range(0, len(target_module_info), module_batch_size)
     ]
-    for modules in module_batches:
+    for modules_batch in module_batches:
         collected_activations = []
-        for model, model_name in zip(models, model_names):
+
+        for model_name in model_names:
+            model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
             collected_activations.append(
-                collect_module_activations(model, model_name, modules, dataset, batch_size=batch_size)
+                collect_module_activations(
+                    model, model_name, modules_batch, dataset, batch_size=batch_size
+                )
             )
 
-        for module in tqdm(modules, desc=f"Computing SVCCA for {len(modules)} modules"):
-            first_model_acts = (
-                torch.cat([item[module].to(device).flatten(0, 1) for item in collected_activations[0]], dim=0)
-                .to(torch.float32)
-            )
-            second_model_acts = (
-                torch.cat([item[module].to(device).flatten(0, 1) for item in collected_activations[1]], dim=0)
-                .to(torch.float32)
-            )
+        # Run SVCCA computation in parallel across GPUs using ThreadPoolExecutor
+        print(f"Parallelizing SVCCA across {num_gpus} GPUs...")
 
-            print(torch.cuda.memory_allocated() / 1024**3, "GB")
+        with ThreadPoolExecutor(max_workers=num_gpus) as executor:
+            # Submit tasks with round-robin GPU assignment
+            futures = {}
+            for idx, module in enumerate(modules_batch):
+                gpu_id = idx % num_gpus
+                future = executor.submit(
+                    compute_svcca_for_module,
+                    module,
+                    gpu_id,
+                    collected_activations[0],
+                    collected_activations[1],
+                )
+                futures[future] = module
 
-            target_module_info[module]["sim"] = (
-                1.0
-                - svcca_distance(  # type: ignore
-                    first_model_acts,
-                    second_model_acts,
-                    0.99,
-                    "svd",
-                ).item()
-            )
-            logging.info(
-                f"SVCCA {(target_module_info[module]['layer'], name)}: "
-                f"{target_module_info[module]['sim']}"
-            )
+            # Collect results with progress bar
+            with tqdm(total=len(modules_batch), desc="Computing SVCCA") as pbar:
+                for future in futures:
+                    module, similarity = future.result()
+                    target_module_info[module]["sim"] = similarity
+                    logging.info(
+                        f"SVCCA {(target_module_info[module]['layer'], target_module_info[module]['group'], module)}: "
+                        f"{similarity}"
+                    )
+                    pbar.update(1)
 
     return target_module_info
+
+
+def plot(args, data_path: Path, output_path: Path):
+
+    module_info = torch.load(data_path)
+
+    plot_similarities(
+        module_info,
+        output_path,
+    )
 
 
 @torch.inference_mode()
 def main(args):
     logger.info(f"Using the first model to tokenize the dataset: {args.models[0]}")
+    output_path = Path("analysis/results/svcca")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    dataset = load_and_tokenize(args.dataset_name, N=args.N, model_name=args.models[0], batch_size=args.batch_size)
+    dataset = load_and_tokenize(
+        args.dataset_name,
+        args.subset,
+        N=args.N,
+        model_name=args.models[0],
+    )
 
     module_info = get_module_info(
-        tuple(args.models), dataset, args.device, batch_size=args.batch_size, target_layers=args.target_layers
+        tuple(args.models),
+        dataset,
+        args.device,
+        batch_size=args.batch_size,
+        target_layers=args.target_layers,
+        num_gpus=args.num_gpus,
     )
 
-    file_name = (
+    run_name = (
         f"layer_sims_{args.dataset_name.split('/')[-1]}"
-        f"_N={len(dataset)}_n_layers={len(args.target_layers)}.png"
+        f"_N={args.N}_n_layers={len(args.target_layers)}_"
+        f"{args.models[0].split('/')[-1]}_{args.models[1].split('/')[-1]}"
     )
-    file_path = Path("analysis/results/svcca") / file_name
+    file_path = output_path / run_name / "module_info.pth"
     file_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(module_info, file_path)
 
-    plot_similarities(
-        module_info,
-        file_path,
-    )
+    plot(args, file_path, output_path / f"{run_name}.png")
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--cache_name", type=str, default="uncached")
     parser.add_argument("--dataset_name", type=str, default="cais/wmdp")
+    parser.add_argument("--subset", type=str, default="wmdp-bio")
     parser.add_argument("--target_layers", nargs="+", default=None)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--N", type=int, default=512)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--num_gpus", type=int, default=8)
     parser.add_argument(
         "--models",
         nargs="+",
         default=[
             "EleutherAI/deep-ignorance-unfiltered",
-            # EleutherAI/deep-ignorance-e2e-strong-filter
-            "EleutherAI/deep-ignorance-e2e-weak-filter",
+            "EleutherAI/deep-ignorance-e2e-strong-filter",
+            # "EleutherAI/deep-ignorance-e2e-weak-filter",
         ],
     )
     args = parser.parse_args()
