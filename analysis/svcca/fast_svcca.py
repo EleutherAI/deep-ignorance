@@ -144,6 +144,10 @@ def extract_layer_idx(name: str) -> int | None:
 def load_and_tokenize(dataset_name: str, N: int, model_name: str, batch_size: int):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
+    # Set pad token if not already set
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     if dataset_name == "cais/wmdp":
         dataset = load_dataset(dataset_name, "wmdp-bio", split="test")
         dataset = assert_type(Dataset, dataset)
@@ -170,7 +174,15 @@ def load_and_tokenize(dataset_name: str, N: int, model_name: str, batch_size: in
         dataset = dataset.map(lambda x: {"input_ids": tokenizer.encode(x["text"])})
 
     dataset = dataset.select(range(N))
-    dataset.set_format(type="torch", columns=["input_ids"])
+
+    # Sort by length to minimize padding
+    dataset = dataset.map(lambda x: {"length": len(x["input_ids"])})
+    dataset = dataset.sort("length")
+
+    # Add attention mask (all 1s initially, will be updated with padding)
+    dataset = dataset.map(lambda x: {"attention_mask": [1] * len(x["input_ids"])})
+
+    dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
 
     return dataset
 
@@ -184,14 +196,38 @@ def collect_module_activations(
     debug: bool = False,
     batch_size: int = 1,
 ) -> list[dict[str, torch.Tensor]]:
-    dl = DataLoader(dataset, batch_size=batch_size, shuffle=False)  # type: ignore
+    def collate_fn(batch):
+        """Pad sequences to the same length within a batch."""
+        input_ids = [item["input_ids"] for item in batch]
+        attention_mask = [item["attention_mask"] for item in batch]
+
+        # Find max length in this batch
+        max_len = max(len(ids) for ids in input_ids)
+
+        # Pad sequences
+        padded_input_ids = []
+        padded_attention_mask = []
+        for ids, mask in zip(input_ids, attention_mask):
+            padding_len = max_len - len(ids)
+            padded_input_ids.append(torch.cat([ids, torch.zeros(padding_len, dtype=ids.dtype)]))
+            padded_attention_mask.append(torch.cat([mask, torch.zeros(padding_len, dtype=mask.dtype)]))
+
+        return {
+            "input_ids": torch.stack(padded_input_ids),
+            "attention_mask": torch.stack(padded_attention_mask)
+        }
+
+    dl = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)  # type: ignore
 
     module_activations = []
     for batch in tqdm(dl, desc=f"Collecting activations for {model_name}"):
         with collect_output_activations(
             model, hookpoints=target_modules
         ) as activations:
-            model(batch["input_ids"].to(model.device))
+            model(
+                input_ids=batch["input_ids"].to(model.device),
+                attention_mask=batch["attention_mask"].to(model.device)
+            )
 
             module_activations.append(
                 {name: activations[name] for name in target_modules}
