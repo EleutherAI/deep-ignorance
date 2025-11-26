@@ -198,6 +198,7 @@ def collect_module_activations(
     dataset: Dataset,
     batch_size: int = 1,
     tokens_per_sequence: int | None = None,
+    sample_strategy: str = "space_evenly",
 ) -> list[dict[str, torch.Tensor]]:
     """Collect module activations from a model.
     Args:
@@ -210,6 +211,7 @@ def collect_module_activations(
             If None, all tokens will be collected. If not None, tokens will be
             sampled from the end of the sequence.
     """
+
     def collate_fn(batch):
         """Pad sequences to the same length within a batch."""
         input_ids = [item["input_ids"] for item in batch]
@@ -247,14 +249,23 @@ def collect_module_activations(
                 attention_mask=batch["attention_mask"].to(model.device),
             )
 
-            if tokens_per_sequence is not None:
-                sample = {
-                    name: activations[name][:, -tokens_per_sequence:] for name in target_modules
-                }
+            # Peek at one activation to get shape/device
+            first_key = target_modules[0] 
+            ref_act = activations[first_key]
+            seq_len = ref_act.shape[1]
+
+            # Sample activations
+            if tokens_per_sequence is None or seq_len <= tokens_per_sequence:
+                sample = {name: activations[name] for name in target_modules}
+            elif sample_strategy == "space_evenly":
+                indices = torch.linspace(
+                    0, seq_len - 1, steps=tokens_per_sequence, device=ref_act.device
+                ).long()
+                sample = {name: activations[name][:, indices] for name in target_modules}
+            elif sample_strategy == "end":
+                sample = {name: activations[name][:, -tokens_per_sequence:] for name in target_modules}
             else:
-                sample = {
-                    name: activations[name] for name in target_modules
-                }
+                raise ValueError(f"Invalid sample strategy: {sample_strategy}")
 
             module_activations.append(sample)
 
@@ -310,11 +321,20 @@ def get_module_info(
     target_layers: list[int] | None = None,
     num_gpus: int = 8,
     tokens_per_sequence: int = 1,
+    sample_strategy: str = "space_evenly",
 ):
-    # Modulate CPU RAM usage by batching module similarities
-    print(f"module_batch_size: {module_batch_size}")
-    print(f"num_gpus: {num_gpus}")
-
+    """Get module information for the given models and dataset.
+    Args:
+        model_names: The names of the models to compare.
+        dataset: The dataset to collect activations from.
+        batch_size: The batch size to use for collecting activations.
+            Modulates GPU RAM usage.
+        module_batch_size: The batch size to use for batching module similarities.
+            Modulates CPU RAM usage.
+        target_layers: The layers to target for SVCCA.
+        num_gpus: The number of GPUs to use for parallel computation.
+            Uses data parallel.
+    """
     named_modules = AutoModelForCausalLM.from_pretrained(
         model_names[0]
     ).base_model.named_modules()
@@ -329,30 +349,21 @@ def get_module_info(
         ):
             layer = extract_layer_idx(name)
             if layer is None:
-                # logger.debug(
-                #     f"Skipping {name} because it doesn't match the layer pattern"
-                # )
                 continue
+
             if target_layers is not None and str(layer) not in target_layers:
-                # logger.debug(
-                #     f"Skipping {name} because {layer} is not in the target layers {target_layers}"
-                # )
                 continue
 
             group = module_group_map(name)
             if group == "other":
-                # logger.debug(f"Skipping {name} because it's in the 'other' group")
                 continue
 
-            if target_layers is not None:
-                if any(
-                    info.get("group") == group and info.get("layer") == layer
-                    for info in target_module_info.values()
-                ):
-                    # logger.debug(
-                    #     f"Skipping {name} because {group} {layer} is already in the target module info"
-                    # )
-                    continue
+            # if target_layers is not None:
+            #     if any(
+            #         info.get("group") == group and info.get("layer") == layer
+            #         for info in target_module_info.values()
+            #     ):
+            #         continue
 
             target_module_info[name] = {
                 "layer": layer,
@@ -373,7 +384,13 @@ def get_module_info(
             model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
             collected_activations.append(
                 collect_module_activations(
-                    model, model_name, modules_batch, dataset, batch_size=batch_size, tokens_per_sequence=tokens_per_sequence
+                    model,
+                    model_name,
+                    modules_batch,
+                    dataset,
+                    batch_size=batch_size,
+                    tokens_per_sequence=tokens_per_sequence,
+                    sample_strategy=sample_strategy,
                 )
             )
 
@@ -433,7 +450,12 @@ def main(args):
 
     # Compute tokens per sequence based on actual dataset length
     tokens_per_sequence = max(1, math.ceil(args.num_samples / len(dataset)))
-    logger.info(f"Dataset length: {len(dataset)}, tokens per sequence: {tokens_per_sequence}")
+    logger.info(
+        f"Dataset length: {len(dataset)}, tokens per sequence: {tokens_per_sequence}"
+    )
+
+    print(f"module_batch_size: {args.module_batch_size}")
+    print(f"num_gpus: {args.num_gpus}")
 
     module_info = get_module_info(
         tuple(args.models),
@@ -442,6 +464,8 @@ def main(args):
         target_layers=args.target_layers,
         num_gpus=args.num_gpus,
         tokens_per_sequence=tokens_per_sequence,
+        module_batch_size=args.module_batch_size,
+        sample_strategy=args.sample_strategy,
     )
 
     run_name = (
@@ -449,11 +473,11 @@ def main(args):
         f"_N={args.num_items}_n_layers={len(args.target_layers)}_"
         f"{args.models[0].split('/')[-1]}_{args.models[1].split('/')[-1]}"
     )
-    file_path = output_path / run_name / "module_info_t.pth"
+    file_path = output_path / run_name / f"module_info_{args.sample_strategy}.pth"
     file_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(module_info, file_path)
 
-    plot(args, file_path, output_path / f"{run_name}_t.png")
+    plot(args, file_path, output_path / f"{run_name}_{args.sample_strategy}.png")
 
 
 if __name__ == "__main__":
@@ -461,7 +485,12 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_name", type=str, default="cais/wmdp")
     parser.add_argument("--subset", type=str, default="wmdp-bio")
     parser.add_argument("--target_layers", nargs="+", default=None)
-    parser.add_argument("--num_items", type=int, default=10_000, help="Number of sequences/items to load from dataset")
+    parser.add_argument(
+        "--num_items",
+        type=int,
+        default=10_000,
+        help="Number of sequences/items to load from dataset",
+    )
     parser.add_argument(
         "--num_samples",
         type=int,
@@ -470,10 +499,17 @@ if __name__ == "__main__":
             "Target number of token activation samples for SVCCA. "
             "A fixed number of activations will be taken from tokens "
             "at the end of each sequence."
-        )
+        ),
+    )
+    parser.add_argument(
+        "--sample_strategy",
+        type=str,
+        default="space_evenly",
+        choices=["space_evenly", "end"],
     )
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_gpus", type=int, default=8)
+    parser.add_argument("--module_batch_size", type=int, default=128)
     parser.add_argument(
         "--models",
         nargs="+",
@@ -482,7 +518,7 @@ if __name__ == "__main__":
             "EleutherAI/deep-ignorance-e2e-strong-filter",
             # "EleutherAI/deep-ignorance-e2e-weak-filter",
             # "EleutherAI/deep-ignorance-unfiltered-cb-lat",
-            # "EleutherAI/deep-ignorance-unfiltered-cb"
+            # "EleutherAI/deep-ignorance-unfiltered-cb",
         ],
     )
     args = parser.parse_args()
