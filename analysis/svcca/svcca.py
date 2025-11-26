@@ -466,7 +466,11 @@ if __name__ == "__main__":
         "--num_samples",
         type=int,
         default=10_000,
-        help="Target number of token activation samples for SVCCA (tokens will be sampled from each sequence to achieve this)"
+        help=(
+            "Target number of token activation samples for SVCCA. "
+            "A fixed number of activations will be taken from tokens "
+            "at the end of each sequence."
+        )
     )
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_gpus", type=int, default=8)
