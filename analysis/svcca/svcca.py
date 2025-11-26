@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Deep Ignorance Model Analysis: SVCCA Comparison
-Downloads models from Hugging Face and performs per-layer SVCCA analysis.
+Downloads two models from Hugging Face and performs per-layer SVCCA analysis.
 """
 from typing import Any
 import re
 from argparse import ArgumentParser
 from pathlib import Path
+import math
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -33,9 +33,6 @@ handler.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
-
-# import warnings
-# warnings.filterwarnings("ignore")
 
 
 def module_group_map(module_name: str) -> str:
@@ -143,7 +140,7 @@ def extract_layer_idx(name: str) -> int | None:
     return None
 
 
-def load_and_tokenize(dataset_name: str, subset: str, N: int, model_name: str):
+def load_and_tokenize(dataset_name: str, subset: str, num_items: int, model_name: str):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # Set pad token if not already set
@@ -157,7 +154,8 @@ def load_and_tokenize(dataset_name: str, subset: str, N: int, model_name: str):
             dataset = load_dataset(dataset_name, split="test")
 
         dataset = assert_type(Dataset, dataset)
-        dataset = dataset.select(range(N))
+        if len(dataset) > num_items:
+            dataset = dataset.select(range(num_items))
 
         def map_mcqa(x):
             choices = [f"{i}. {choice}" for i, choice in enumerate(x["choices"])]
@@ -176,7 +174,7 @@ def load_and_tokenize(dataset_name: str, subset: str, N: int, model_name: str):
 
         dataset = dataset.map(map_mcqa)
     else:
-        dataset = load_dataset(dataset_name, split=f"train[:{N}]")
+        dataset = load_dataset(dataset_name, split=f"train[:{num_items}]")
         dataset = assert_type(Dataset, dataset)
         dataset = dataset.map(lambda x: {"input_ids": tokenizer.encode(x["text"])})
 
@@ -198,9 +196,20 @@ def collect_module_activations(
     model_name: str,
     target_modules: list[str],
     dataset: Dataset,
-    debug: bool = False,
     batch_size: int = 1,
+    tokens_per_sequence: int | None = None,
 ) -> list[dict[str, torch.Tensor]]:
+    """Collect module activations from a model.
+    Args:
+        model: The model to collect activations from.
+        model_name: The name of the model.
+        target_modules: The modules to collect activations from.
+        dataset: The dataset to collect activations from.
+        batch_size: The batch size to use for collecting activations.
+        tokens_per_sequence: The number of tokens to sample per sequence.
+            If None, all tokens will be collected. If not None, tokens will be
+            sampled from the end of the sequence.
+    """
     def collate_fn(batch):
         """Pad sequences to the same length within a batch."""
         input_ids = [item["input_ids"] for item in batch]
@@ -238,9 +247,16 @@ def collect_module_activations(
                 attention_mask=batch["attention_mask"].to(model.device),
             )
 
-            module_activations.append(
-                {name: activations[name] for name in target_modules}
-            )
+            if tokens_per_sequence is not None:
+                sample = {
+                    name: activations[name][:, -tokens_per_sequence:] for name in target_modules
+                }
+            else:
+                sample = {
+                    name: activations[name] for name in target_modules
+                }
+
+            module_activations.append(sample)
 
     return module_activations
 
@@ -289,11 +305,11 @@ def compute_svcca_for_module(
 def get_module_info(
     model_names: tuple[str, str],
     dataset: Dataset,
-    device: str,
     batch_size: int,
     module_batch_size: int = 128,
     target_layers: list[int] | None = None,
     num_gpus: int = 8,
+    tokens_per_sequence: int = 1,
 ):
     # Modulate CPU RAM usage by batching module similarities
     print(f"module_batch_size: {module_batch_size}")
@@ -313,19 +329,19 @@ def get_module_info(
         ):
             layer = extract_layer_idx(name)
             if layer is None:
-                logger.debug(
-                    f"Skipping {name} because it doesn't match the layer pattern"
-                )
+                # logger.debug(
+                #     f"Skipping {name} because it doesn't match the layer pattern"
+                # )
                 continue
             if target_layers is not None and str(layer) not in target_layers:
-                logger.debug(
-                    f"Skipping {name} because {layer} is not in the target layers {target_layers}"
-                )
+                # logger.debug(
+                #     f"Skipping {name} because {layer} is not in the target layers {target_layers}"
+                # )
                 continue
 
             group = module_group_map(name)
             if group == "other":
-                logger.debug(f"Skipping {name} because it's in the 'other' group")
+                # logger.debug(f"Skipping {name} because it's in the 'other' group")
                 continue
 
             if target_layers is not None:
@@ -333,9 +349,9 @@ def get_module_info(
                     info.get("group") == group and info.get("layer") == layer
                     for info in target_module_info.values()
                 ):
-                    logger.debug(
-                        f"Skipping {name} because {group} {layer} is already in the target module info"
-                    )
+                    # logger.debug(
+                    #     f"Skipping {name} because {group} {layer} is already in the target module info"
+                    # )
                     continue
 
             target_module_info[name] = {
@@ -357,7 +373,7 @@ def get_module_info(
             model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
             collected_activations.append(
                 collect_module_activations(
-                    model, model_name, modules_batch, dataset, batch_size=batch_size
+                    model, model_name, modules_batch, dataset, batch_size=batch_size, tokens_per_sequence=tokens_per_sequence
                 )
             )
 
@@ -411,29 +427,33 @@ def main(args):
     dataset = load_and_tokenize(
         args.dataset_name,
         args.subset,
-        N=args.N,
+        num_items=args.num_items,
         model_name=args.models[0],
     )
+
+    # Compute tokens per sequence based on actual dataset length
+    tokens_per_sequence = max(1, math.ceil(args.num_samples / len(dataset)))
+    logger.info(f"Dataset length: {len(dataset)}, tokens per sequence: {tokens_per_sequence}")
 
     module_info = get_module_info(
         tuple(args.models),
         dataset,
-        args.device,
         batch_size=args.batch_size,
         target_layers=args.target_layers,
         num_gpus=args.num_gpus,
+        tokens_per_sequence=tokens_per_sequence,
     )
 
     run_name = (
         f"layer_sims_{args.dataset_name.split('/')[-1]}"
-        f"_N={args.N}_n_layers={len(args.target_layers)}_"
+        f"_N={args.num_items}_n_layers={len(args.target_layers)}_"
         f"{args.models[0].split('/')[-1]}_{args.models[1].split('/')[-1]}"
     )
-    file_path = output_path / run_name / "module_info.pth"
+    file_path = output_path / run_name / "module_info_t.pth"
     file_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(module_info, file_path)
 
-    plot(args, file_path, output_path / f"{run_name}.png")
+    plot(args, file_path, output_path / f"{run_name}_t.png")
 
 
 if __name__ == "__main__":
@@ -441,8 +461,13 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_name", type=str, default="cais/wmdp")
     parser.add_argument("--subset", type=str, default="wmdp-bio")
     parser.add_argument("--target_layers", nargs="+", default=None)
-    parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--N", type=int, default=512)
+    parser.add_argument("--num_items", type=int, default=10_000, help="Number of sequences/items to load from dataset")
+    parser.add_argument(
+        "--num_samples",
+        type=int,
+        default=10_000,
+        help="Target number of token activation samples for SVCCA (tokens will be sampled from each sequence to achieve this)"
+    )
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_gpus", type=int, default=8)
     parser.add_argument(
@@ -452,6 +477,8 @@ if __name__ == "__main__":
             "EleutherAI/deep-ignorance-unfiltered",
             "EleutherAI/deep-ignorance-e2e-strong-filter",
             # "EleutherAI/deep-ignorance-e2e-weak-filter",
+            # "EleutherAI/deep-ignorance-unfiltered-cb-lat",
+            # "EleutherAI/deep-ignorance-unfiltered-cb"
         ],
     )
     args = parser.parse_args()
