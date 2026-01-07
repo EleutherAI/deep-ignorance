@@ -138,6 +138,37 @@ def svcca_distance(x: Tensor, y: Tensor, accept_rate: float, backend: str) -> Te
     return 1 - diag.sum() / div
 
 
+def svcca_transform(
+    x: Tensor,
+    y: Tensor,
+    accept_rate: float,
+    backend: str
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Singular Vector CCA with transformation matrices.
+
+    Similar to svcca_distance, but returns the transformation matrices
+    and reduced representations for mapping between activation spaces.
+
+    Args:
+        x: input tensor of Shape DxH, where D>H
+        y: input tensor of Shape DxW, where D>W
+        accept_rate: 0.99 (threshold for SVD reduction)
+        backend: svd or qr
+
+    Returns:
+        tuple of (x_reduced, y_reduced, a, b, diag) where:
+        - x_reduced: SVD-reduced x (keeps components up to accept_rate variance)
+        - y_reduced: SVD-reduced y (keeps components up to accept_rate variance)
+        - a: CCA transformation matrix for x_reduced
+        - b: CCA transformation matrix for y_reduced
+        - diag: canonical correlations (diagonal of CCA)
+    """
+    x_reduced = _svd_reduction(x, accept_rate)
+    y_reduced = _svd_reduction(y, accept_rate)
+    a, b, diag = cca(x_reduced, y_reduced, backend)
+    return x_reduced, y_reduced, a, b, diag
+
+
 def pwcca_distance(x: Tensor, y: Tensor, backend: str) -> Tensor:
     """Projection Weighted CCA proposed in Marcos et al. 2018.
 
