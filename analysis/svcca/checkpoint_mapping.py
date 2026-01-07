@@ -176,9 +176,9 @@ def compute_orthogonal_mapping(early_acts, late_acts, max_samples: int | None = 
 
     # Procrustes solution
     M = y.T @ x
-    print("svd")
+    print("svd in procrustes")
     U, S, Vh = torch.linalg.svd(M, full_matrices=False)
-    print("svd done")
+    print("svd done in procrustes")
 
     R = U @ Vh
 
@@ -247,11 +247,12 @@ def compute_cosine_similarity_per_token(
     return cos_sims.mean().item(), cos_sims.std().item()
 
 
-def compute_svcca_mapping_for_module(
+def compute_mapping_for_module(
     module: str,
     gpu_id: int,
     early_activations: list[dict[str, Tensor]],
     late_activations: list[dict[str, Tensor]],
+    tag: str,
 ) -> tuple[str, dict]:
     """
     Compute SVCCA transformation and cosine similarities for a module.
@@ -281,25 +282,32 @@ def compute_svcca_mapping_for_module(
 
     # 3. Apply Orthogonal Mapping (Replacing SVCCA here)
     # transformed_early = compute_orthogonal_mapping(early_acts, late_acts)
-    affine_mapping = fit_affine_mapping(early_acts, late_acts)
-    transformed_early = apply_affine_mapping(early_acts, affine_mapping)
+    if tag == "affine":
+        affine_mapping = fit_affine_mapping(early_acts, late_acts)
+        transformed_early = apply_affine_mapping(early_acts, affine_mapping)
+    elif tag == "procrustes":
+        transformed_early = compute_orthogonal_mapping(early_acts, late_acts)
+    elif tag == "svcca":
+        # Compute SVCCA transformation
+        accept_rate = 0.999
+        x_reduced, y_reduced, a, b, diag, V_k, V_y = svcca_transform(
+            early_acts, late_acts, accept_rate, "svd"
+        )
+        # Transform early activations using SVCCA mapping
+        # Project to CCA space
+        early_in_cca = x_reduced @ a
+        late_in_cca = y_reduced @ b
+        # Project back to late's original space
+        transformed_early = early_in_cca @ torch.linalg.pinv(b) @ V_y.T
+        print(early_in_cca.shape, b.shape, y_reduced.shape, "early in cca, b, y reduced shapes")
+        print(transformed_early.shape, late_acts.shape, "transformed early and late shapes")
+    else:
+        raise ValueError(f"Invalid tag: {tag}")
 
-    print("orthogonal mapping done")
+    print("mapping done")
     print(transformed_early.shape)
 
-    # Compute SVCCA transformation
-    # accept_rate = 0.999
-    # x_reduced, y_reduced, a, b, diag, V_k, V_y = svcca_transform(
-    #     early_acts, late_acts, accept_rate, "svd"
-    # )
-    # Transform early activations using SVCCA mapping
-    # Project to CCA space
-    # early_in_cca = x_reduced @ a
-    # late_in_cca = y_reduced @ b
-    # Project back to late's original space
-    # transformed_early = early_in_cca @ torch.linalg.pinv(b) @ V_y.T
-    # print(early_in_cca.shape, b.shape, y_reduced.shape, "early in cca, b, y reduced shapes")
-    # print(transformed_early.shape, late_acts.shape, "transformed early and late shapes")
+    
 
     # Compute cosine similarity after transformation
     cos_trans_mean, cos_trans_std = compute_cosine_similarity_per_token(
@@ -310,7 +318,6 @@ def compute_svcca_mapping_for_module(
     # div = min(a.size(1), b.size(1))
     # svcca_sim = 1.0 - (1.0 - diag.sum() / div).item()
 
-
     print("Done!")
     results = {
         "cosine_original_mean": cos_orig_mean,
@@ -318,10 +325,11 @@ def compute_svcca_mapping_for_module(
         "cosine_transformed_mean": cos_trans_mean,
         "cosine_transformed_std": cos_trans_std,
         "cosine_improvement": cos_trans_mean - cos_orig_mean,
-        "affine_mapping": affine_mapping,
         # "svcca_similarity": svcca_sim,
         # "transformation_rank": div,
     }
+    if tag == "affine":
+        results["affine_mapping"] = affine_mapping
     print("results", results)
 
     logger.info(
@@ -348,6 +356,7 @@ def analyze_checkpoint_mapping(
     num_gpus: int,
     tokens_per_sequence: int,
     sample_strategy: str,
+    tag: str,
     max_modules: int | None = None,
 ) -> dict[str, dict]:
     """
@@ -494,11 +503,12 @@ def analyze_checkpoint_mapping(
             for idx, module in enumerate(modules_batch):
                 gpu_id = idx % num_gpus
                 future = executor.submit(
-                    compute_svcca_mapping_for_module,
+                    compute_mapping_for_module,
                     module,
                     gpu_id,
                     early_acts,
                     late_acts,
+                    tag,
                 )
                 futures[future] = module
 

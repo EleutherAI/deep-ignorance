@@ -40,16 +40,16 @@ EARLY_CHECKPOINT = "global_step38144"
 # EARLY_CHECKPOINT = "main"
 
 checkpoints = [
-    # "global_step5960",
-    # "global_step10728",
+    "global_step5960",
+    "global_step10728",
     "global_step20264",
-    # "global_step35760",
+    "global_step35760",
     # "global_step46488",
-    # "global_step50064",
+    "global_step50064",
     # "global_step79864"
-    # "global_step100128",
+    "global_step100128",
     # "global_step109664",
-    # "global_step118008"
+    "global_step118008"
 ]
 
 tag = "procrustes"
@@ -427,13 +427,13 @@ def save_results(module_info: dict[str, dict], output_dir: Path):
             # "transformation_rank": info["transformation_rank"],
         }
     
-    json_path = output_dir / "checkpoint_rotation_results.json"
+    json_path = output_dir / f"checkpoint_rotation_results_{tag}.json"
     with open(json_path, "w") as f:
         json.dump(json_results, f, indent=2)
     logger.info(f"Results saved to: {json_path}")
     
     # Save PyTorch format for compatibility
-    torch_path = output_dir / "checkpoint_rotation_results.pth"
+    torch_path = output_dir / f"checkpoint_rotation_results_{tag}.pth"
     torch.save(module_info, torch_path)
     logger.info(f"Results saved to: {torch_path}")
 
@@ -565,7 +565,9 @@ def main():
             num_gpus=num_gpus,
             tokens_per_sequence=tokens_per_sequence,
             sample_strategy=sample_strategy,
+            tag=tag,
             max_modules=max_modules,  # Limit total modules
+            
         )
         
         # Store results
@@ -593,19 +595,19 @@ def main():
         
         # Create individual visualization
         logger.info(f"Creating visualization for {checkpoint}...")
-        plot_path = checkpoint_output_dir / "checkpoint_rotation_analysis.png"
+        plot_path = checkpoint_output_dir / f"checkpoint_rotation_analysis_{tag}.png"
         plot_cosine_similarities(module_info, plot_path, checkpoint_name=checkpoint)
     
     # Create comparison plot across all checkpoints
     logger.info("=" * 80)
     logger.info("Creating comparison plot across all checkpoints...")
     logger.info("=" * 80)
-    comparison_plot_path = output_dir / "checkpoint_comparison.png"
+    comparison_plot_path = output_dir / f"checkpoint_comparison_{tag}.png"
     plot_checkpoint_comparison(all_results, comparison_plot_path)
     
     # Save aggregated results
     logger.info("Saving aggregated results...")
-    aggregated_json_path = output_dir / "all_checkpoints_results.json"
+    aggregated_json_path = output_dir / f"all_checkpoints_results_{tag}.json"
     aggregated_results = {}
     for checkpoint, module_info in all_results.items():
         aggregated_results[checkpoint] = {}
