@@ -401,14 +401,11 @@ def analyze_checkpoint_mapping(
         logger.info(f"Processing module batch {batch_idx + 1}/{len(module_batches)}")
         
         late_acts_path = Path("analysis/results/svcca") / f"late_acts_{batch_idx}.pth"
-        early_acts_path = Path("analysis/results/svcca") / f"early_acts_{batch_idx}.pth"
+        early_acts_path = Path("analysis/results/svcca") / f"early_acts_{batch_idx}_{early_revision}.pth"
         late_acts_path.parent.mkdir(parents=True, exist_ok=True)
         early_acts_path.parent.mkdir(parents=True, exist_ok=True)
-        if (late_acts_path.exists() and early_acts_path.exists()):
-            logger.info(f"Loading late and early activations from {late_acts_path} and {early_acts_path}")
-            late_acts = torch.load(late_acts_path)
-            early_acts = torch.load(early_acts_path)
-        else:
+        
+        if not early_acts_path.exists():
             # Load early checkpoint
             logger.info(f"Loading early checkpoint: {early_model}@{early_revision}")
             early_model_obj = AutoModelForCausalLM.from_pretrained(
@@ -424,9 +421,14 @@ def analyze_checkpoint_mapping(
                 tokens_per_sequence=tokens_per_sequence,
                 sample_strategy=sample_strategy,
             )
+            torch.save(
+                early_acts,
+                early_acts_path
+            )
             del early_model_obj
             torch.cuda.empty_cache()
 
+        if not late_acts_path.exists():
             # Load late checkpoint
             logger.info(f"Loading late checkpoint: {late_model}")
             late_model_obj = AutoModelForCausalLM.from_pretrained(
@@ -445,12 +447,12 @@ def analyze_checkpoint_mapping(
                 late_acts,
                 late_acts_path
             )
-            torch.save(
-                early_acts,
-                early_acts_path
-            )
             del late_model_obj
             torch.cuda.empty_cache()
+
+        logger.info(f"Loading late and early activations from {late_acts_path} and {early_acts_path}")
+        late_acts = torch.load(late_acts_path)
+        early_acts = torch.load(early_acts_path)
 
         first_module = list(early_acts[0].keys())[0]
         print("early_acts", early_acts[0][first_module].shape)

@@ -53,9 +53,17 @@ checkpoints = [
 ]
 
 
+def extract_step_number(checkpoint: str) -> int:
+    """Extract step number from checkpoint string (e.g., 'global_step5960' -> 5960)."""
+    if "global_step" in checkpoint:
+        return int(checkpoint.replace("global_step", ""))
+    return 0
+
+
 def plot_cosine_similarities(
     module_info: dict[str, dict],
     output_path: Path,
+    checkpoint_name: str = None,
 ):
     """Plot cosine similarities before and after SVCCA transformation."""
     group_data = defaultdict(lambda: {"layers": [], "orig": [], "trans": [], "improvement": []})
@@ -73,7 +81,10 @@ def plot_cosine_similarities(
     
     # Create figure with subplots
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle("Representation Rotation Analysis: Early vs Late Checkpoint", fontsize=16, fontweight="bold")
+    title = "Representation Rotation Analysis: Early vs Late Checkpoint"
+    if checkpoint_name:
+        title += f" ({checkpoint_name})"
+    fig.suptitle(title, fontsize=16, fontweight="bold")
     
     styles = {
         "input_ln": ("solid", "blue", "Input Layer Norm"),
@@ -186,6 +197,156 @@ def plot_cosine_similarities(
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     logger.info(f"Plot saved to: {output_path}")
+    plt.close()
+
+
+def plot_checkpoint_comparison(
+    all_results: dict[str, dict[str, dict]],
+    output_path: Path,
+):
+    """Plot comparison of rotation metrics across all checkpoints."""
+    # Extract step numbers and sort checkpoints
+    checkpoint_steps = [(cp, extract_step_number(cp)) for cp in all_results.keys()]
+    checkpoint_steps.sort(key=lambda x: x[1])
+    sorted_checkpoints = [cp for cp, _ in checkpoint_steps]
+    step_numbers = [step for _, step in checkpoint_steps]
+    
+    # Aggregate data by module group across checkpoints
+    group_metrics = defaultdict(lambda: {
+        "checkpoints": [],
+        "orig_mean": [],
+        "trans_mean": [],
+        "improvement_mean": [],
+    })
+    
+    for checkpoint in sorted_checkpoints:
+        module_info = all_results[checkpoint]
+        
+        # Group by module type
+        by_group = defaultdict(list)
+        for name, info in module_info.items():
+            group = module_group_map(name)
+            if group != "other":
+                by_group[group].append(info)
+        
+        # Compute mean metrics per group
+        for group, infos in by_group.items():
+            if infos:
+                orig_sims = [info["cosine_original_mean"] for info in infos]
+                trans_sims = [info["cosine_transformed_mean"] for info in infos]
+                improvements = [info["cosine_improvement"] for info in infos]
+                
+                group_metrics[group]["checkpoints"].append(checkpoint)
+                group_metrics[group]["orig_mean"].append(np.mean(orig_sims))
+                group_metrics[group]["trans_mean"].append(np.mean(trans_sims))
+                group_metrics[group]["improvement_mean"].append(np.mean(improvements))
+    
+    # Create comparison plot
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig.suptitle("Checkpoint Rotation Comparison: All Checkpoints vs Late Checkpoint", 
+                 fontsize=16, fontweight="bold")
+    
+    styles = {
+        "input_ln": ("solid", "blue", "Input Layer Norm"),
+        "attention": ("dotted", "green", "Attention"),
+        "mlp": ("dashdot", "red", "MLP"),
+        "post_ln": ("dashed", "orange", "Post Layer Norm"),
+    }
+    
+    # Plot 1: Original cosine similarity over checkpoints
+    ax1 = axes[0, 0]
+    for module_group, (linestyle, color, label) in styles.items():
+        if module_group not in group_metrics:
+            continue
+        
+        ax1.plot(step_numbers, group_metrics[module_group]["orig_mean"],
+                linestyle=linestyle, color=color, label=label,
+                linewidth=2, marker="o", markersize=6)
+    
+    ax1.set_xlabel("Training Step")
+    ax1.set_ylabel("Mean Original Cosine Similarity")
+    ax1.set_title("Original Cosine Similarity vs Training Step")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    ax1.set_ylim(0, 1)
+    
+    # Plot 2: Transformed cosine similarity over checkpoints
+    ax2 = axes[0, 1]
+    for module_group, (linestyle, color, label) in styles.items():
+        if module_group not in group_metrics:
+            continue
+        
+        ax2.plot(step_numbers, group_metrics[module_group]["trans_mean"],
+                linestyle=linestyle, color=color, label=label,
+                linewidth=2, marker="o", markersize=6)
+    
+    ax2.set_xlabel("Training Step")
+    ax2.set_ylabel("Mean Transformed Cosine Similarity")
+    ax2.set_title("Transformed Cosine Similarity vs Training Step")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    ax2.set_ylim(0, 1)
+    
+    # Plot 3: Improvement over checkpoints
+    ax3 = axes[1, 0]
+    for module_group, (linestyle, color, label) in styles.items():
+        if module_group not in group_metrics:
+            continue
+        
+        ax3.plot(step_numbers, group_metrics[module_group]["improvement_mean"],
+                linestyle=linestyle, color=color, label=label,
+                linewidth=2, marker="o", markersize=6)
+    
+    ax3.set_xlabel("Training Step")
+    ax3.set_ylabel("Mean Improvement from SVCCA")
+    ax3.set_title("SVCCA Improvement vs Training Step")
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    ax3.axhline(y=0, color="black", linestyle="--", alpha=0.5)
+    ax3.set_ylim(0, 1)
+    
+    # Plot 4: Overall summary - average across all module groups
+    ax4 = axes[1, 1]
+    overall_orig = []
+    overall_trans = []
+    overall_improvement = []
+    
+    for checkpoint in sorted_checkpoints:
+        module_info = all_results[checkpoint]
+        all_orig = []
+        all_trans = []
+        all_improvement = []
+        
+        for name, info in module_info.items():
+            group = module_group_map(name)
+            if group != "other":
+                all_orig.append(info["cosine_original_mean"])
+                all_trans.append(info["cosine_transformed_mean"])
+                all_improvement.append(info["cosine_improvement"])
+        
+        if all_orig:
+            overall_orig.append(np.mean(all_orig))
+            overall_trans.append(np.mean(all_trans))
+            overall_improvement.append(np.mean(all_improvement))
+    
+    ax4.plot(step_numbers, overall_orig, linestyle="solid", color="blue", 
+            label="Original", linewidth=2, marker="o", markersize=6)
+    ax4.plot(step_numbers, overall_trans, linestyle="dashed", color="green", 
+            label="Transformed", linewidth=2, marker="s", markersize=6)
+    ax4.plot(step_numbers, overall_improvement, linestyle="dashdot", color="red", 
+            label="Improvement", linewidth=2, marker="^", markersize=6)
+    
+    ax4.set_xlabel("Training Step")
+    ax4.set_ylabel("Mean Cosine Similarity / Improvement")
+    ax4.set_title("Overall Summary (All Module Groups)")
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    ax4.axhline(y=0, color="black", linestyle="--", alpha=0.3)
+    ax4.set_ylim(0, 1)
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    logger.info(f"Comparison plot saved to: {output_path}")
     plt.close()
 
 
@@ -343,7 +504,7 @@ def load_and_tokenize_local_dataset(
 
 
 def main():
-    """Main function to run the checkpoint rotation analysis."""
+    """Main function to run the checkpoint rotation analysis for all checkpoints."""
     # Configuration
     dataset_path = "rmu_training_data/bio-forget-corpus"
     num_items = 100  # Number of examples to use (reduced for testing)
@@ -358,16 +519,17 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     logger.info("=" * 80)
-    logger.info("Checkpoint Rotation Analysis")
+    logger.info("Checkpoint Rotation Analysis - All Checkpoints")
     logger.info("=" * 80)
-    logger.info(f"Early checkpoint: {EARLY_CHECKPOINT_MODEL_NAME}@{EARLY_CHECKPOINT}")
+    logger.info(f"Early checkpoint model: {EARLY_CHECKPOINT_MODEL_NAME}")
     logger.info(f"Late checkpoint: {LATE_CHECKPOINT_MODEL_NAME}")
+    logger.info(f"Checkpoints to analyze: {checkpoints}")
     logger.info(f"Dataset: {dataset_path}")
     logger.info(f"Number of examples: {num_items}")
     logger.info(f"Max modules (testing): {max_modules}")
     logger.info("=" * 80)
     
-    # Load and tokenize dataset
+    # Load and tokenize dataset (only once)
     logger.info("Loading and tokenizing dataset...")
     dataset = load_and_tokenize_local_dataset(
         dataset_path,
@@ -379,37 +541,81 @@ def main():
     tokens_per_sequence = max(1, math.ceil(num_samples / len(dataset)))
     logger.info(f"Dataset length: {len(dataset)}, tokens per sequence: {tokens_per_sequence}")
     
-    # Run analysis
-    logger.info("Starting checkpoint mapping analysis...")
-    module_info = analyze_checkpoint_mapping(
-        early_model=EARLY_CHECKPOINT_MODEL_NAME,
-        early_revision=EARLY_CHECKPOINT,
-        late_model=LATE_CHECKPOINT_MODEL_NAME,
-        dataset=dataset,
-        batch_size=batch_size,
-        module_batch_size=max_modules,  # Process all modules in one batch
-        target_layers=None,
-        num_gpus=num_gpus,
-        tokens_per_sequence=tokens_per_sequence,
-        sample_strategy=sample_strategy,
-        max_modules=max_modules,  # Limit total modules
-    )
+    # Store results for all checkpoints
+    all_results = {}
     
-    # Save results
-    logger.info("Saving results...")
-    save_results(module_info, output_dir)
+    # Run analysis for each checkpoint
+    for checkpoint in checkpoints:
+        logger.info("=" * 80)
+        logger.info(f"Analyzing checkpoint: {checkpoint}")
+        logger.info("=" * 80)
+        
+        # Run analysis
+        logger.info("Starting checkpoint mapping analysis...")
+        module_info = analyze_checkpoint_mapping(
+            early_model=EARLY_CHECKPOINT_MODEL_NAME,
+            early_revision=checkpoint,
+            late_model=LATE_CHECKPOINT_MODEL_NAME,
+            dataset=dataset,
+            batch_size=batch_size,
+            module_batch_size=max_modules,  # Process all modules in one batch
+            target_layers=None,
+            num_gpus=num_gpus,
+            tokens_per_sequence=tokens_per_sequence,
+            sample_strategy=sample_strategy,
+            max_modules=max_modules,  # Limit total modules
+        )
+        
+        # Store results
+        all_results[checkpoint] = module_info
+        
+        # Save individual checkpoint results
+        checkpoint_output_dir = output_dir / checkpoint
+        logger.info(f"Saving results for {checkpoint}...")
+        save_results(module_info, checkpoint_output_dir)
+        
+        # Print summary for this checkpoint
+        logger.info(f"\nSummary for {checkpoint}:")
+        print_summary_statistics(module_info)
+        
+        # Create individual visualization
+        logger.info(f"Creating visualization for {checkpoint}...")
+        plot_path = checkpoint_output_dir / "checkpoint_rotation_analysis.png"
+        plot_cosine_similarities(module_info, plot_path, checkpoint_name=checkpoint)
     
-    # Print summary
-    print_summary_statistics(module_info)
+    # Create comparison plot across all checkpoints
+    logger.info("=" * 80)
+    logger.info("Creating comparison plot across all checkpoints...")
+    logger.info("=" * 80)
+    comparison_plot_path = output_dir / "checkpoint_comparison.png"
+    plot_checkpoint_comparison(all_results, comparison_plot_path)
     
-    # Create visualizations
-    logger.info("Creating visualizations...")
-    plot_path = output_dir / "checkpoint_rotation_analysis.png"
-    plot_cosine_similarities(module_info, plot_path)
+    # Save aggregated results
+    logger.info("Saving aggregated results...")
+    aggregated_json_path = output_dir / "all_checkpoints_results.json"
+    aggregated_results = {}
+    for checkpoint, module_info in all_results.items():
+        aggregated_results[checkpoint] = {}
+        for name, info in module_info.items():
+            aggregated_results[checkpoint][name] = {
+                "layer": info["layer"],
+                "group": info["group"],
+                "cosine_original_mean": info["cosine_original_mean"],
+                "cosine_original_std": info["cosine_original_std"],
+                "cosine_transformed_mean": info["cosine_transformed_mean"],
+                "cosine_transformed_std": info["cosine_transformed_std"],
+                "cosine_improvement": info["cosine_improvement"],
+            }
+    
+    with open(aggregated_json_path, "w") as f:
+        json.dump(aggregated_results, f, indent=2)
+    logger.info(f"Aggregated results saved to: {aggregated_json_path}")
     
     logger.info("=" * 80)
-    logger.info("Analysis complete!")
+    logger.info("Analysis complete for all checkpoints!")
     logger.info(f"Results saved to: {output_dir}")
+    logger.info(f"Individual checkpoint results in: {output_dir}/<checkpoint>/")
+    logger.info(f"Comparison plot: {comparison_plot_path}")
     logger.info("=" * 80)
 
 
