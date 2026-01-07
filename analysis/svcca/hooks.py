@@ -14,6 +14,7 @@ def collect_activations(
     hookpoints: list[str],
     token: int | None = None,
     input_acts: bool = False,
+    offload_device = torch.device("cpu")
 ):
     """
     Context manager that hooks a model and collects activations.
@@ -28,8 +29,6 @@ def collect_activations(
     """
     activations = {}
     handles = []
-
-    offload_device = torch.device("cpu")
 
     def create_input_hook(hookpoint: str):
         def input_hook(module: nn.Module, input: Any, output: Any) -> None:

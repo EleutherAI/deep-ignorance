@@ -258,10 +258,24 @@ def collect_module_activations(
             if tokens_per_sequence is None or seq_len <= tokens_per_sequence:
                 sample = {name: activations[name] for name in target_modules}
             elif sample_strategy == "space_evenly":
-                indices = torch.linspace(
-                    0, seq_len - 1, steps=tokens_per_sequence, device=ref_act.device
-                ).long()
-                sample = {name: activations[name][:, indices] for name in target_modules}
+                # Get actual lengths from attention mask
+                actual_lengths = batch["attention_mask"].sum(dim=1)  # [batch_size]
+                print("actual_lengths", actual_lengths)
+                
+                sampled = {}
+                for name in target_modules:
+                    act = activations[name]  # [batch, seq_len, hidden]
+                    batch_samples = []
+                    for b in range(act.shape[0]):
+                        length = actual_lengths[b].item()
+                        indices = torch.linspace(0, length - 1, steps=tokens_per_sequence).long().to(act.device)
+                        batch_samples.append(act[b, indices])
+                    sampled[name] = torch.stack(batch_samples)
+                sample = sampled    
+                # indices = torch.linspace(
+                #     0, seq_len - 1, steps=tokens_per_sequence, device=ref_act.device
+                # ).long()
+                # sample = {name: activations[name][:, indices] for name in target_modules}
             elif sample_strategy == "end":
                 sample = {name: activations[name][:, -tokens_per_sequence:] for name in target_modules}
             else:
@@ -381,7 +395,8 @@ def get_module_info(
         collected_activations = []
 
         for model_name in model_names:
-            model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
+            # use  bfloat
+            model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", torch_dtype=torch.bfloat16)
             collected_activations.append(
                 collect_module_activations(
                     model,
@@ -393,6 +408,7 @@ def get_module_info(
                     sample_strategy=sample_strategy,
                 )
             )
+            print("model device", model.device)
 
         # Run SVCCA computation in parallel across GPUs using ThreadPoolExecutor
         print(f"Parallelizing SVCCA across {num_gpus} GPUs...")

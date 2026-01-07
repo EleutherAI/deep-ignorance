@@ -37,9 +37,6 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
-# import warnings
-# warnings.filterwarnings("ignore")
-
 
 @torch.inference_mode()
 @contextmanager
@@ -371,7 +368,7 @@ def load_and_tokenize(dataset_name: str, tokenizer, N: int):
 
 
 @torch.inference_mode()
-def collect_module_activations(model, model_name, modules, dataset, device, debug=False):
+def collect_module_activations(model, model_name: str, modules: list[str], dataset: Dataset, device: torch.device, debug: bool = False):
     dl = DataLoader(dataset, batch_size=1, shuffle=False)  # type: ignore
 
     print("usage", torch.cuda.memory_allocated() / 1024**3, "GB")
@@ -383,10 +380,12 @@ def collect_module_activations(model, model_name, modules, dataset, device, debu
         ) as activations:
             model(batch["input_ids"])
 
-            for module in modules:
-                # batch size of 1
-                activations[module] = activations[module].cpu().squeeze()
-            module_activations.append(activations)
+            batch_acts = {
+                module: activations[module].cpu().clone().squeeze()
+                for module in modules
+            }
+
+            module_activations.append(batch_acts)
 
 
     print(module_activations[0].keys())

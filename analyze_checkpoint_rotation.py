@@ -33,8 +33,24 @@ logger = logging.getLogger(__name__)
 
 # Model checkpoints to compare
 LATE_CHECKPOINT_MODEL_NAME = "EleutherAI/deep-ignorance-unfiltered"
+# LATE_CHECKPOINT_MODEL_NAME = "EleutherAI/pythia-14m"
 EARLY_CHECKPOINT_MODEL_NAME = "EleutherAI/deep-ignorance-pretraining-stage-unfiltered"
+# EARLY_CHECKPOINT_MODEL_NAME = "EleutherAI/pythia-14m"
 EARLY_CHECKPOINT = "global_step38144"
+# EARLY_CHECKPOINT = "main"
+
+checkpoints = [
+    "global_step5960",
+    "global_step10728",
+    "global_step20264",
+    # "global_step35760",
+    "global_step46488",
+    # "global_step50064",
+    # "global_step79864"
+    "global_step100128",
+    # "global_step109664",
+    # "global_step118008"
+]
 
 
 def plot_cosine_similarities(
@@ -136,36 +152,36 @@ def plot_cosine_similarities(
     ax3.grid(True, alpha=0.3)
     ax3.axhline(y=0, color="black", linestyle="--", alpha=0.5)
     
-    # Plot 4: SVCCA similarity scores
-    ax4 = axes[1, 1]
-    group_svcca = defaultdict(lambda: {"layers": [], "svcca": []})
-    for name, info in module_info.items():
-        module_group = module_group_map(name)
-        if module_group == "other":
-            continue
-        group_svcca[module_group]["layers"].append(info["layer"])
-        group_svcca[module_group]["svcca"].append(info["svcca_similarity"])
+    # # Plot 4: SVCCA similarity scores
+    # ax4 = axes[1, 1]
+    # group_svcca = defaultdict(lambda: {"layers": [], "svcca": []})
+    # for name, info in module_info.items():
+    #     module_group = module_group_map(name)
+    #     if module_group == "other":
+    #         continue
+    #     group_svcca[module_group]["layers"].append(info["layer"])
+    #     # group_svcca[module_group]["svcca"].append(info["svcca_similarity"])
     
-    for module_group, (linestyle, color, label) in styles.items():
-        if module_group not in group_svcca or not group_svcca[module_group]["layers"]:
-            continue
+    # for module_group, (linestyle, color, label) in styles.items():
+    #     if module_group not in group_svcca or not group_svcca[module_group]["layers"]:
+    #         continue
         
-        sorted_data = sorted(zip(
-            group_svcca[module_group]["layers"],
-            group_svcca[module_group]["svcca"]
-        ))
-        layers, svcca_sims = zip(*sorted_data) if sorted_data else ([], [])
+    #     sorted_data = sorted(zip(
+    #         group_svcca[module_group]["layers"],
+    #         group_svcca[module_group]["svcca"]
+    #     ))
+    #     layers, svcca_sims = zip(*sorted_data) if sorted_data else ([], [])
         
-        if layers:
-            ax4.plot(layers, svcca_sims, linestyle=linestyle, color=color, label=label,
-                    linewidth=2, marker="o", markersize=4)
+    #     if layers:
+    #         ax4.plot(layers, svcca_sims, linestyle=linestyle, color=color, label=label,
+    #                 linewidth=2, marker="o", markersize=4)
     
-    ax4.set_xlabel("Layer Index")
-    ax4.set_ylabel("SVCCA Similarity")
-    ax4.set_title("SVCCA Similarity Score")
-    ax4.legend()
-    ax4.grid(True, alpha=0.3)
-    ax4.set_ylim(0, 1)
+    # ax4.set_xlabel("Layer Index")
+    # ax4.set_ylabel("SVCCA Similarity")
+    # ax4.set_title("SVCCA Similarity Score")
+    # ax4.legend()
+    # ax4.grid(True, alpha=0.3)
+    # ax4.set_ylim(0, 1)
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -193,7 +209,7 @@ def print_summary_statistics(module_info: dict[str, dict]):
         orig_sims = [info["cosine_original_mean"] for info in infos]
         trans_sims = [info["cosine_transformed_mean"] for info in infos]
         improvements = [info["cosine_improvement"] for info in infos]
-        svcca_sims = [info["svcca_similarity"] for info in infos]
+        # svcca_sims = [info["svcca_similarity"] for info in infos]
         
         print(f"  Original Cosine Similarity:")
         print(f"    Mean: {np.mean(orig_sims):.4f} ± {np.std(orig_sims):.4f}")
@@ -207,9 +223,9 @@ def print_summary_statistics(module_info: dict[str, dict]):
         print(f"    Mean: {np.mean(improvements):.4f} ± {np.std(improvements):.4f}")
         print(f"    Min: {np.min(improvements):.4f}, Max: {np.max(improvements):.4f}")
         
-        print(f"  SVCCA Similarity:")
-        print(f"    Mean: {np.mean(svcca_sims):.4f} ± {np.std(svcca_sims):.4f}")
-        print(f"    Min: {np.min(svcca_sims):.4f}, Max: {np.max(svcca_sims):.4f}")
+        # print(f"  SVCCA Similarity:")
+        # print(f"    Mean: {np.mean(svcca_sims):.4f} ± {np.std(svcca_sims):.4f}")
+        # print(f"    Min: {np.min(svcca_sims):.4f}, Max: {np.max(svcca_sims):.4f}")
     
     print("\n" + "=" * 80)
     print("INTERPRETATION:")
@@ -244,8 +260,8 @@ def save_results(module_info: dict[str, dict], output_dir: Path):
             "cosine_transformed_mean": info["cosine_transformed_mean"],
             "cosine_transformed_std": info["cosine_transformed_std"],
             "cosine_improvement": info["cosine_improvement"],
-            "svcca_similarity": info["svcca_similarity"],
-            "transformation_rank": info["transformation_rank"],
+            # "svcca_similarity": info["svcca_similarity"],
+            # "transformation_rank": info["transformation_rank"],
         }
     
     json_path = output_dir / "checkpoint_rotation_results.json"
@@ -330,9 +346,9 @@ def main():
     """Main function to run the checkpoint rotation analysis."""
     # Configuration
     dataset_path = "rmu_training_data/bio-forget-corpus"
-    num_items = 1000  # Number of examples to use
-    num_samples = 10000  # Target number of token activations
-    batch_size = 16
+    num_items = 100  # Number of examples to use (reduced for testing)
+    num_samples = 2048  # Target number of token activations (reduced for testing)
+    batch_size = 4  # Reduced batch size to avoid memory issues
     max_modules = 8  # Limit to 8 modules for testing
     num_gpus = 8
     sample_strategy = "space_evenly"

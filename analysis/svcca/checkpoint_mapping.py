@@ -19,14 +19,25 @@ from datasets import Dataset
 from tqdm import tqdm
 import logging
 
+from torch import Tensor
+import torch.nn.functional as F
+
 # Local imports
-from analysis.svcca.distance import svcca_transform
+from analysis.svcca.distance import cca
 from analysis.svcca.svcca import (
     collect_module_activations,
     load_and_tokenize,
     extract_layer_idx,
     module_group_map,
 )
+
+# def set_deterministic():
+#     torch.manual_seed(0)
+#     torch.backends.cudnn.deterministic = True
+#     torch.backends.cudnn.benchmark = False
+#     torch.use_deterministic_algorithms(True)
+
+# set_deterministic()
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -38,9 +49,151 @@ handler.setFormatter(formatter)
 logger.addHandler(handler)
 
 
+def _svd_reduction_with_basis(x: Tensor, accept_rate: float) -> tuple[Tensor, Tensor]:
+    """Returns (x_reduced, V_k) where x_reduced = x @ V_k"""
+    # Assuming current implementation does something like:
+    print("x", x.shape)
+    U, S, Vh = torch.linalg.svd(x, full_matrices=False)
+
+    # Compute cumulative variance ratio
+    var_explained = S ** 2
+    var_ratio = var_explained / var_explained.sum()
+    cumulative_ratio = torch.cumsum(var_ratio, dim=0)
+    
+    # Find k: minimum components to reach accept_rate
+    k = (cumulative_ratio < accept_rate).sum().item() + 1
+    # print("using a k of", k, "to reach an accept_rate of", accept_rate)
+
+    V_k = Vh[:k].T  # [original_dim, k]
+    x_reduced = x @ V_k  # [n_samples, k]
+    return x_reduced, V_k
+
+
+def svcca_transform(
+    x: Tensor,
+    y: Tensor,
+    accept_rate: float,
+    backend: str
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Singular Vector CCA with transformation matrices.
+
+    Similar to svcca_distance, but returns the transformation matrices
+    and reduced representations for mapping between activation spaces.
+
+    Args:
+        x: input tensor of Shape DxH, where D>H
+        y: input tensor of Shape DxW, where D>W
+        accept_rate: 0.99 (threshold for SVD reduction)
+        backend: svd or qr
+
+    Returns:
+        tuple of (x_reduced, y_reduced, a, b, diag) where:
+        - x_reduced: SVD-reduced x (keeps components up to accept_rate variance)
+        - y_reduced: SVD-reduced y (keeps components up to accept_rate variance)
+        - a: CCA transformation matrix for x_reduced
+        - b: CCA transformation matrix for y_reduced
+        - diag: canonical correlations (diagonal of CCA)
+    """
+    x_reduced, V_k = _svd_reduction_with_basis(x, accept_rate)
+    y_reduced, V_y = _svd_reduction_with_basis(y, accept_rate)
+    a, b, diag = cca(x_reduced, y_reduced, backend)
+    return x_reduced, y_reduced, a, b, diag, V_k, V_y
+
+
+def compute_affine_mapping(early_acts: Tensor, late_acts: Tensor, alpha: float = 0.01) -> Tensor:
+    """
+    Finds the optimal Affine Map (W, b) using Ridge Regression.
+    Allows Rotation + Scaling + Shearing.
+    """
+    # 1. Force Float32 for precision
+    X = early_acts.float()
+    Y = late_acts.float()
+    
+    # 2. Center the data (Solving for Bias implicitly)
+    mu_x = X.mean(dim=0, keepdim=True)
+    mu_y = Y.mean(dim=0, keepdim=True)
+    
+    X_centered = X - mu_x
+    Y_centered = Y - mu_y
+
+    # 3. Solve W = (X^T X + alpha*I)^-1 @ X^T Y
+    # We use Cholesky solve or standard solve for stability
+    
+    # Covariance matrices
+    # If N (tokens) < D (hidden dim), this is rank deficient, so alpha is required.
+    Cov_XX = X_centered.T @ X_centered
+    Cov_XY = X_centered.T @ Y_centered
+    
+    # Add Ridge Regularization (Tikhonov) to diagonal
+    eye = torch.eye(Cov_XX.shape[0], device=X.device, dtype=X.dtype)
+    Cov_XX_reg = Cov_XX + (alpha * eye)
+    
+    # Solve
+    # W has shape [Dim, Dim]
+    W = torch.linalg.solve(Cov_XX_reg, Cov_XY)
+    
+    # 4. Apply transformation
+    # Y_pred = (X - mu_x) @ W + mu_y
+    transformed = (X_centered @ W) + mu_y
+    
+    return transformed.to(early_acts.dtype)
+
+
+def compute_orthogonal_mapping(early_acts, late_acts, max_samples: int | None = 20000):
+    print("orth")
+    x_full = early_acts.float()
+    y_full = late_acts.float()
+
+    num_tokens = x_full.shape[0]
+    print("num_tokens", num_tokens)
+
+    if num_tokens > max_samples:
+        # Create random indices
+        indices = torch.randperm(num_tokens, device=x_full.device)[:max_samples]
+        x_fit = x_full[indices]
+        y_fit = y_full[indices]
+    else:
+        x_fit = x_full
+        y_fit = y_full
+
+    # Center the data
+    mu_x = x_fit.mean(0)
+    mu_y = y_fit.mean(0)
+    x = x_fit - mu_x
+    y = y_fit - mu_y
+
+    # Procrustes solution
+    M = y.T @ x
+    print("svd")
+    U, S, Vh = torch.linalg.svd(M, full_matrices=False)
+    print("svd done")
+
+    R = U @ Vh
+
+    print("applying to full dataset")
+
+    # Apply to the full dataset
+
+    # R_user = Vh.T @ U.T
+    # transformed = x @ R_user.T + mu_y
+    
+    # Map
+    # R = Vh.T @ U.T
+    # transformed = x @ R.T + mu_y
+
+    real_mu_x = x_full.mean(0, keepdim=True)
+    real_mu_y = y_full.mean(0, keepdim=True)
+    
+    # Transform: (X - mu_x) @ R.T + mu_y
+    # Note: R.T is the inverse rotation
+    print("transforming")
+    transformed = (x_full - real_mu_x) @ R.T + real_mu_y
+    print("transforming done")
+    return transformed
+
 def compute_cosine_similarity_per_token(
-    acts1: torch.Tensor,
-    acts2: torch.Tensor
+    acts1: Tensor,
+    acts2: Tensor
 ) -> tuple[float, float]:
     """
     Compute cosine similarity per token, return mean and std.
@@ -52,12 +205,32 @@ def compute_cosine_similarity_per_token(
     Returns:
         (mean, std) of cosine similarities across tokens
     """
-    # Normalize
-    acts1_norm = acts1 / (acts1.norm(dim=1, keepdim=True) + 1e-8)
-    acts2_norm = acts2 / (acts2.norm(dim=1, keepdim=True) + 1e-8)
+    # Find zero vectors
+    zero_mask1 = (acts1.norm(dim=1) == 0)
+    zero_mask2 = (acts2.norm(dim=1) == 0)
+    # assert zero_mask1.sum() == 0
 
-    # Cosine similarity per token
-    cos_sims = (acts1_norm * acts2_norm).sum(dim=1)
+    non_zero_mask1 = ~zero_mask1
+    non_zero_mask2 = ~zero_mask2
+
+    # print("zero_mask1", zero_mask1.sum(), "zero_mask2", zero_mask2.sum())
+    # print("non_zero_mask1", non_zero_mask1.sum(), "non_zero_mask2", non_zero_mask2.sum())
+    
+    
+    # assert (zero_mask1 == zero_mask2).all(), \
+        # f"Zero vectors at different indices: {zero_mask1.sum()} vs {zero_mask2.sum()}"
+    
+    # Filter out zero vectors
+    valid_mask = ~zero_mask1
+    acts1 = acts1[valid_mask]
+    acts2 = acts2[valid_mask]
+
+    zero_mask2 = (acts2.norm(dim=1) == 0)
+    valid_mask = ~zero_mask2
+    acts1 = acts1[valid_mask]
+    acts2 = acts2[valid_mask]
+    
+    cos_sims = F.cosine_similarity(acts1, acts2, dim=1)
 
     return cos_sims.mean().item(), cos_sims.std().item()
 
@@ -65,8 +238,8 @@ def compute_cosine_similarity_per_token(
 def compute_svcca_mapping_for_module(
     module: str,
     gpu_id: int,
-    early_activations: list[dict[str, torch.Tensor]],
-    late_activations: list[dict[str, torch.Tensor]],
+    early_activations: list[dict[str, Tensor]],
+    late_activations: list[dict[str, Tensor]],
 ) -> tuple[str, dict]:
     """
     Compute SVCCA transformation and cosine similarities for a module.
@@ -94,20 +267,25 @@ def compute_svcca_mapping_for_module(
         early_acts, late_acts
     )
 
-    # Compute SVCCA transformation
-    x_reduced, y_reduced, a, b, diag = svcca_transform(
-        early_acts, late_acts, 0.99, "svd"
-    )
+    # 3. Apply Orthogonal Mapping (Replacing SVCCA here)
+    # transformed_early = compute_orthogonal_mapping(early_acts, late_acts)
+    transformed_early = compute_affine_mapping(early_acts, late_acts)
+    print("orthogonal mapping done")
+    print(transformed_early.shape)
 
+    # Compute SVCCA transformation
+    # accept_rate = 0.999
+    # x_reduced, y_reduced, a, b, diag, V_k, V_y = svcca_transform(
+    #     early_acts, late_acts, accept_rate, "svd"
+    # )
     # Transform early activations using SVCCA mapping
     # Project to CCA space
-    early_in_cca = x_reduced @ a
-    late_in_cca = y_reduced @ b
-
+    # early_in_cca = x_reduced @ a
+    # late_in_cca = y_reduced @ b
     # Project back to late's original space
-    # We transform: early_cca @ b.T gives us coordinates in y_reduced space
-    # Then @ y_reduced.T projects back to original late space
-    transformed_early = early_in_cca @ b.T @ y_reduced.T
+    # transformed_early = early_in_cca @ torch.linalg.pinv(b) @ V_y.T
+    # print(early_in_cca.shape, b.shape, y_reduced.shape, "early in cca, b, y reduced shapes")
+    # print(transformed_early.shape, late_acts.shape, "transformed early and late shapes")
 
     # Compute cosine similarity after transformation
     cos_trans_mean, cos_trans_std = compute_cosine_similarity_per_token(
@@ -115,18 +293,21 @@ def compute_svcca_mapping_for_module(
     )
 
     # SVCCA similarity score
-    div = min(a.size(1), b.size(1))
-    svcca_sim = 1.0 - (1.0 - diag.sum() / div).item()
+    # div = min(a.size(1), b.size(1))
+    # svcca_sim = 1.0 - (1.0 - diag.sum() / div).item()
 
+
+    print("Done!")
     results = {
         "cosine_original_mean": cos_orig_mean,
         "cosine_original_std": cos_orig_std,
         "cosine_transformed_mean": cos_trans_mean,
         "cosine_transformed_std": cos_trans_std,
         "cosine_improvement": cos_trans_mean - cos_orig_mean,
-        "svcca_similarity": svcca_sim,
-        "transformation_rank": div,
+        # "svcca_similarity": svcca_sim,
+        # "transformation_rank": div,
     }
+    print("results", results)
 
     logger.info(
         f"Module {module}: orig={cos_orig_mean:.4f}, trans={cos_trans_mean:.4f}, "
@@ -134,9 +315,9 @@ def compute_svcca_mapping_for_module(
     )
 
     # Free GPU memory
-    del early_acts, late_acts, x_reduced, y_reduced, a, b
-    del early_in_cca, late_in_cca, transformed_early
-    torch.cuda.empty_cache()
+    # del early_acts, late_acts, x_reduced, y_reduced, a, b
+    # del early_in_cca, late_in_cca, transformed_early
+    # torch.cuda.empty_cache()
 
     return module, results
 
@@ -175,7 +356,7 @@ def analyze_checkpoint_mapping(
     logger.info("Loading model to identify target modules...")
 
     # Get target modules (reuse from svcca.py)
-    model = AutoModelForCausalLM.from_pretrained(late_model)
+    model = AutoModelForCausalLM.from_pretrained(late_model, torch_dtype=torch.bfloat16)
     named_modules = model.base_model.named_modules()
 
     target_module_info = {}
@@ -218,40 +399,76 @@ def analyze_checkpoint_mapping(
 
     for batch_idx, modules_batch in enumerate(module_batches):
         logger.info(f"Processing module batch {batch_idx + 1}/{len(module_batches)}")
+        
+        late_acts_path = Path("analysis/results/svcca") / f"late_acts_{batch_idx}.pth"
+        early_acts_path = Path("analysis/results/svcca") / f"early_acts_{batch_idx}.pth"
+        late_acts_path.parent.mkdir(parents=True, exist_ok=True)
+        early_acts_path.parent.mkdir(parents=True, exist_ok=True)
+        if (late_acts_path.exists() and early_acts_path.exists()):
+            logger.info(f"Loading late and early activations from {late_acts_path} and {early_acts_path}")
+            late_acts = torch.load(late_acts_path)
+            early_acts = torch.load(early_acts_path)
+        else:
+            # Load early checkpoint
+            logger.info(f"Loading early checkpoint: {early_model}@{early_revision}")
+            early_model_obj = AutoModelForCausalLM.from_pretrained(
+                early_model, revision=early_revision, device_map="auto", torch_dtype=torch.bfloat16
+            )
 
-        # Load early checkpoint
-        logger.info(f"Loading early checkpoint: {early_model}@{early_revision}")
-        early_model_obj = AutoModelForCausalLM.from_pretrained(
-            early_model, revision=early_revision, device_map="auto"
-        )
-        early_acts = collect_module_activations(
-            early_model_obj,
-            f"{early_model}@{early_revision}",
-            modules_batch,
-            dataset,
-            batch_size=batch_size,
-            tokens_per_sequence=tokens_per_sequence,
-            sample_strategy=sample_strategy,
-        )
-        del early_model_obj
-        torch.cuda.empty_cache()
+            early_acts = collect_module_activations(
+                early_model_obj,
+                f"{early_model}@{early_revision}",
+                modules_batch,
+                dataset,
+                batch_size=batch_size,
+                tokens_per_sequence=tokens_per_sequence,
+                sample_strategy=sample_strategy,
+            )
+            del early_model_obj
+            torch.cuda.empty_cache()
 
-        # Load late checkpoint
-        logger.info(f"Loading late checkpoint: {late_model}")
-        late_model_obj = AutoModelForCausalLM.from_pretrained(
-            late_model, device_map="auto"
-        )
-        late_acts = collect_module_activations(
-            late_model_obj,
-            late_model,
-            modules_batch,
-            dataset,
-            batch_size=batch_size,
-            tokens_per_sequence=tokens_per_sequence,
-            sample_strategy=sample_strategy,
-        )
-        del late_model_obj
-        torch.cuda.empty_cache()
+            # Load late checkpoint
+            logger.info(f"Loading late checkpoint: {late_model}")
+            late_model_obj = AutoModelForCausalLM.from_pretrained(
+                late_model, device_map="auto", torch_dtype=torch.bfloat16
+            )
+            late_acts = collect_module_activations(
+                late_model_obj,
+                late_model,
+                modules_batch,
+                dataset,
+                batch_size=batch_size,
+                tokens_per_sequence=tokens_per_sequence,
+                sample_strategy=sample_strategy,
+            )
+            torch.save( 
+                late_acts,
+                late_acts_path
+            )
+            torch.save(
+                early_acts,
+                early_acts_path
+            )
+            del late_model_obj
+            torch.cuda.empty_cache()
+
+        first_module = list(early_acts[0].keys())[0]
+        print("early_acts", early_acts[0][first_module].shape)
+        print("late_acts", late_acts[0][first_module].shape)
+        print("len early_acts", len(early_acts))
+        print("len late_acts", len(late_acts))
+        # exit()
+
+        for i in range(num_gpus):
+            try:
+                # Force initialization of cuSOLVER on each GPU sequentially
+                d = f"cuda:{i}"
+                dummy = torch.eye(2, device=d)
+                # This dummy call initializes the lazy wrapper safely
+                torch.linalg.solve(dummy, dummy) 
+                torch.cuda.synchronize(d)
+            except Exception as e:
+                print(f"Warmup on {d} failed (might not be used): {e}")
 
         # Parallel SVCCA computation
         logger.info(f"Computing SVCCA mappings across {num_gpus} GPUs...")
