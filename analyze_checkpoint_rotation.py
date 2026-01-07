@@ -40,17 +40,19 @@ EARLY_CHECKPOINT = "global_step38144"
 # EARLY_CHECKPOINT = "main"
 
 checkpoints = [
-    "global_step5960",
-    "global_step10728",
+    # "global_step5960",
+    # "global_step10728",
     "global_step20264",
     # "global_step35760",
-    "global_step46488",
+    # "global_step46488",
     # "global_step50064",
     # "global_step79864"
-    "global_step100128",
+    # "global_step100128",
     # "global_step109664",
     # "global_step118008"
 ]
+
+tag = "procrustes"
 
 
 def extract_step_number(checkpoint: str) -> int:
@@ -568,6 +570,17 @@ def main():
         
         # Store results
         all_results[checkpoint] = module_info
+
+        # Save affine mappings (one per module)
+        affine_mappings = {}
+        for module_name, info in module_info.items():
+            if "affine_mapping" in info:
+                affine_mappings[module_name] = info["affine_mapping"]
+        
+        if affine_mappings:
+            affine_mapping_path = output_dir / f"affine_mapping_{checkpoint}.pth"
+            torch.save(affine_mappings, affine_mapping_path)
+            logger.info(f"Affine mappings saved to: {affine_mapping_path} ({len(affine_mappings)} modules)")
         
         # Save individual checkpoint results
         checkpoint_output_dir = output_dir / checkpoint

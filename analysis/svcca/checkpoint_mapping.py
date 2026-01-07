@@ -18,7 +18,6 @@ from transformers import AutoModelForCausalLM
 from datasets import Dataset
 from tqdm import tqdm
 import logging
-
 from torch import Tensor
 import torch.nn.functional as F
 
@@ -100,43 +99,56 @@ def svcca_transform(
     return x_reduced, y_reduced, a, b, diag, V_k, V_y
 
 
-def compute_affine_mapping(early_acts: Tensor, late_acts: Tensor, alpha: float = 0.01) -> Tensor:
+def fit_affine_mapping(source_acts: Tensor, target_acts: Tensor, alpha: float = 0.01):
     """
-    Finds the optimal Affine Map (W, b) using Ridge Regression.
-    Allows Rotation + Scaling + Shearing.
+    Computes and returns the Affine Map (W, b) such that Y ~ X @ W + b.
+    Returns a dictionary containing the parameters.
     """
     # 1. Force Float32 for precision
-    X = early_acts.float()
-    Y = late_acts.float()
+    X = source_acts.float()
+    Y = target_acts.float()
     
-    # 2. Center the data (Solving for Bias implicitly)
+    # 2. Compute means
     mu_x = X.mean(dim=0, keepdim=True)
     mu_y = Y.mean(dim=0, keepdim=True)
     
+    # 3. Center data
     X_centered = X - mu_x
     Y_centered = Y - mu_y
 
-    # 3. Solve W = (X^T X + alpha*I)^-1 @ X^T Y
-    # We use Cholesky solve or standard solve for stability
-    
-    # Covariance matrices
-    # If N (tokens) < D (hidden dim), this is rank deficient, so alpha is required.
+    # 4. Solve for W using Ridge Regression
+    # (X^T X + alpha*I)^-1 @ X^T Y
     Cov_XX = X_centered.T @ X_centered
     Cov_XY = X_centered.T @ Y_centered
     
-    # Add Ridge Regularization (Tikhonov) to diagonal
     eye = torch.eye(Cov_XX.shape[0], device=X.device, dtype=X.dtype)
     Cov_XX_reg = Cov_XX + (alpha * eye)
     
-    # Solve
-    # W has shape [Dim, Dim]
     W = torch.linalg.solve(Cov_XX_reg, Cov_XY)
     
-    # 4. Apply transformation
-    # Y_pred = (X - mu_x) @ W + mu_y
-    transformed = (X_centered @ W) + mu_y
+    # 5. Calculate the combined Bias term
+    # Derivation: Y = (X - mu_x) @ W + mu_y
+    #             Y = X @ W - mu_x @ W + mu_y
+    #             Y = X @ W + (mu_y - mu_x @ W)
+    # So, b = mu_y - (mu_x @ W)
+    b = mu_y - (mu_x @ W)
     
-    return transformed.to(early_acts.dtype)
+    # Return parameters as a dictionary (state_dict style)
+    return {
+        "W": W,
+        "b": b.squeeze(0) # Remove batch dim for cleaner storage
+    }
+
+def apply_affine_mapping(new_acts: Tensor, mapping: dict) -> Tensor:
+    """
+    Applies the pre-computed mapping to new activations.
+    """
+    # Ensure inputs are same dtype/device as mapping
+    W = mapping["W"].to(new_acts.device).type(new_acts.dtype)
+    b = mapping["b"].to(new_acts.device).type(new_acts.dtype)
+    
+    # Linear projection: Y = XW + b
+    return (new_acts @ W) + b
 
 
 def compute_orthogonal_mapping(early_acts, late_acts, max_samples: int | None = 20000):
@@ -269,7 +281,9 @@ def compute_svcca_mapping_for_module(
 
     # 3. Apply Orthogonal Mapping (Replacing SVCCA here)
     # transformed_early = compute_orthogonal_mapping(early_acts, late_acts)
-    transformed_early = compute_affine_mapping(early_acts, late_acts)
+    affine_mapping = fit_affine_mapping(early_acts, late_acts)
+    transformed_early = apply_affine_mapping(early_acts, affine_mapping)
+
     print("orthogonal mapping done")
     print(transformed_early.shape)
 
@@ -304,6 +318,7 @@ def compute_svcca_mapping_for_module(
         "cosine_transformed_mean": cos_trans_mean,
         "cosine_transformed_std": cos_trans_std,
         "cosine_improvement": cos_trans_mean - cos_orig_mean,
+        "affine_mapping": affine_mapping,
         # "svcca_similarity": svcca_sim,
         # "transformation_rank": div,
     }
